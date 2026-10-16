@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "axiom_blueprint_items",
+  "version": "${version}",
+  "name": "Axiom Blueprint Items",
+  "description": "Your Axiom blueprint library as reusable creative inventory items.",
+  "authors": ["markectomy"],
+  "license": "All Rights Reserved",
+  "environment": "*",
+  "mixins": [
+    {"config": "axiom_blueprint_items.client.mixins.json", "environment": "client"},
+    {"config": "axiom_blueprint_items.axiom.mixins.json", "environment": "client"}
+  ],
+  "entrypoints": {
+    "main": [{"adapter": "kotlin", "value": "dev.markectomy.blueprints.BlueprintItems"}],
+    "client": [{"adapter": "kotlin", "value": "dev.markectomy.blueprints.client.BlueprintItemsClient"}]
+  },
+  "depends": {
+    "minecraft": "26.2",
+    "java": ">=25",
+    "fabricloader": ">=0.19.5",
+    "fabric-api": "*",
+    "fabric-language-kotlin": ">=1.14.2+kotlin.2.4.21",
+    "axiom": "6.1.3"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "dev.markectomy.blueprints.client.integration.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["CloneBlueprintMixin"],
+  "injectors": {"defaultRequire": 1}
+}

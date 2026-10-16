@@ -1,0 +1,7 @@
+{
+  "model": {
+    "type": "minecraft:special",
+    "base": "axiom_blueprint_items:item/blueprint",
+    "model": {"type": "axiom_blueprint_items:thumbnail"}
+  }
+}

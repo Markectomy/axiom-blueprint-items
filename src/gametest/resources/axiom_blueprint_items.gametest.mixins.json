@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "dev.markectomy.blueprints.gametest.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["AxiomSyntheticKeyboardMixin"],
+  "injectors": {"defaultRequire": 1}
+}

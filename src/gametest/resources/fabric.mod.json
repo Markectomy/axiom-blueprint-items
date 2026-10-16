@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "axiom_blueprint_items_test",
+  "version": "1.0.0",
+  "name": "Axiom Blueprint Items integration tests",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-client-gametest": [
+      "dev.markectomy.blueprints.gametest.BlueprintPlacementGameTest"
+    ]
+  },
+  "depends": {
+    "axiom_blueprint_items": "*",
+    "fabric-client-gametest-api-v1": "*"
+  },
+  "mixins": [
+    "axiom_blueprint_items.gametest.mixins.json"
+  ]
+}
