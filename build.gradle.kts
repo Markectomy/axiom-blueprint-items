@@ -84,4 +84,7 @@ tasks.processResources {
     inputs.property("version", resourceVersion)
     filesMatching("fabric.mod.json") { expand("version" to resourceVersion) }
 }
+tasks.withType<Jar>().configureEach {
+    from("LICENSE") { into("META-INF") }
+}
 tasks.test { useJUnitPlatform() }

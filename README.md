@@ -73,3 +73,8 @@ with `./gradlew runClient`.
 
 The build fetches Axiom for development; it does not bundle Axiom in the addon.
 Kotlin and Java compiler warnings are treated as errors.
+
+## License
+
+Licensed under the [MIT License](LICENSE).
+Axiom, the Gradle wrapper, and other third-party dependencies retain their own licenses.

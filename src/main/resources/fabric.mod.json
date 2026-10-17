@@ -5,7 +5,7 @@
   "name": "Axiom Blueprint Items",
   "description": "Your Axiom blueprint library as reusable creative inventory items.",
   "authors": ["markectomy"],
-  "license": "All Rights Reserved",
+  "license": "MIT",
   "icon": "assets/axiom_blueprint_items/icon.png",
   "environment": "*",
   "mixins": [
