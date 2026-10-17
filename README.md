@@ -14,11 +14,21 @@ Blueprint items are reusable links to files in your Axiom library.
 - Fabric Language Kotlin 1.14.2+kotlin.2.4.21 or later
 - Axiom 6.1.3
 
-Supports singleplayer creative mode. Multiplayer and Bedrock are not supported.
+Supports creative mode in singleplayer and on Axiom-enabled Java servers.
+Bedrock clients are not supported.
 
 ## Installation
 
 Put the addon jar and its dependencies in your Minecraft instance's `mods` folder.
+Install this addon on the client only. A multiplayer server needs its own Axiom
+support: Axiom 6.1.3 on Fabric, or a compatible Axiom Paper plugin. The server does
+not need this addon or Fabric Language Kotlin for it. Axiom's multiplayer access
+rules and the server's permissions still apply.
+
+Use a dedicated server for this client-only setup. Hosting through **Open to LAN**
+currently requires connecting players to install this addon too: Fabric shares
+the legacy item registrations retained for older singleplayer worlds.
+
 Save blueprints through Axiom as usual, then open the creative inventory and
 select **Blueprints**. The tab uses the free bottom-row position before Inventory
 when available; otherwise, find it with Fabric's page arrows.
@@ -56,9 +66,20 @@ finished or cancelled before starting another blueprint.
 ## Library links
 
 Items store a relative library path and a fallback name, not the build itself.
+New links use vanilla paper with vanilla item data, so multiplayer servers can
+store and transfer them without registering a custom blueprint item. Their
+appearance and placement behavior come from your client addon; players without
+it see named paper. Avoid using blueprint links in paper crafting recipes.
+
 Editing the source changes future placements. Moving or deleting the file breaks
 the link; the item remains in your inventory and reports the problem. Copy the
 matching library files when moving a world to another computer.
+
+The source library stays on each player's computer. Giving someone a link does
+not transfer its blueprint file; it works for them only if the same relative
+library path exists locally. Existing custom blueprint items from older
+singleplayer worlds remain readable. Newly taken items use the portable paper
+representation.
 
 Saved entities follow Axiom's **Copy Entities** setting and are included in undo.
 Entity-only blueprints are currently unsupported.

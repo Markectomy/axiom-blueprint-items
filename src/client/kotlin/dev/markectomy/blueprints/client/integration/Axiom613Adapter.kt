@@ -15,6 +15,8 @@ import com.moulberry.axiom.restrictions.AxiomPermission
 import com.moulberry.axiom.world_modification.BlockBuffer
 import dev.markectomy.blueprints.domain.preview.VoxelPreview
 import net.minecraft.client.Minecraft
+import net.minecraft.client.multiplayer.ClientLevel
+import net.minecraft.client.player.LocalPlayer
 import net.minecraft.core.BlockPos
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.nbt.NbtAccounter
@@ -40,7 +42,12 @@ class PreparedBlueprint internal constructor(
 
 /** Axiom 6.1.3 library loading and native Clone handoff. */
 object Axiom613Adapter {
-    private data class ImportedPlacement(val clone: CloneBuilderTool, val previousTool: BuilderTool)
+    private data class ImportedPlacement(
+        val clone: CloneBuilderTool,
+        val previousTool: BuilderTool,
+        val player: LocalPlayer,
+        val level: ClientLevel,
+    )
 
     private var importedPlacement: ImportedPlacement? = null
     private const val MAGIC = 182827830
@@ -207,10 +214,13 @@ object Axiom613Adapter {
         AxiomClient.hasPermission(AxiomPermission.BUILDERTOOL_CLONE) &&
         BuilderToolManager.canUseBuilderTools() && !EditorUI.isEnabled()
 
-    /** Client/render-thread-only. Caller must revalidate player/session and creative singleplayer. */
+    /** Client/render-thread-only. Caller must revalidate the prepared source and held reference. */
     fun start(prepared: PreparedBlueprint, position: BlockPos): Boolean {
         inputTick()
-        if (!isAvailable() || isPlacing() || prepared.region.isEmpty) return false
+        val client = Minecraft.getInstance()
+        val player = client.player ?: return false
+        val level = client.level ?: return false
+        if (!player.isCreative || !isAvailable() || isPlacing() || prepared.region.isEmpty) return false
         val minimum = prepared.region.min() ?: return false
         val tools = BuilderToolManager.getTools()
         val previousTool = tools.getOrNull(BuilderToolManager.getToolSlotSelected()) ?: return false
@@ -224,11 +234,20 @@ object Axiom613Adapter {
         // Saved coordinates are relative to the blueprint origin, which may be above its base.
         val offset = position.offset(0, -minimum.y, 0)
         (clone as BlueprintCloneBridge).`blueprints$start`(prepared.raw, prepared.region, offset)
-        importedPlacement = ImportedPlacement(clone, previousTool)
+        importedPlacement = ImportedPlacement(clone, previousTool, player, level)
         return true
     }
 
+    fun validateImportedPreview() {
+        val placement = importedPlacement ?: return
+        val client = Minecraft.getInstance()
+        if (client.player !== placement.player || client.level !== placement.level ||
+            !placement.player.isCreative || !isAvailable()
+        ) clearImportedPreview()
+    }
+
     fun inputTick() {
+        validateImportedPreview()
         val placement = importedPlacement ?: return
         val bridge = placement.clone as BlueprintCloneBridge
         bridge.`blueprints$inputTick`()

@@ -6,7 +6,8 @@
   "environment": "client",
   "entrypoints": {
     "fabric-client-gametest": [
-      "dev.markectomy.blueprints.gametest.BlueprintPlacementGameTest"
+      "dev.markectomy.blueprints.gametest.BlueprintPlacementGameTest",
+      "dev.markectomy.blueprints.gametest.BlueprintMultiplayerGameTest"
     ]
   },
   "depends": {

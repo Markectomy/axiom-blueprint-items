@@ -4,7 +4,10 @@
   "compatibilityLevel": "JAVA_25",
   "client": [
     "BlueprintAnimationMixin",
+    "BlueprintCreativePacketMixin",
     "BlueprintFrameMixin",
+    "BlueprintItemModelMixin",
+    "BlueprintStackMixin",
     "ContainerScreenAccess",
     "CreativeScreenAccess",
     "CreativeScreenMixin",

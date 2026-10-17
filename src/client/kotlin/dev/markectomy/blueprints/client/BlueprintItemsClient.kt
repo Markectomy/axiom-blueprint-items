@@ -11,6 +11,7 @@ import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter
+import dev.markectomy.blueprints.client.integration.BlueprintItemInteractions
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents
 import net.fabricmc.fabric.api.resource.v1.ResourceLoader
 import net.fabricmc.fabric.api.resource.v1.reloader.SimpleReloadListener
@@ -24,6 +25,7 @@ object BlueprintItemsClient : ClientModInitializer {
         BlueprintItems.useHandler = placement::use
         BlueprintItems.libraryItems = { BlueprintLibrary.snapshot.entries.map { it.reference } }
         BlueprintItems.nameResolver = { BlueprintLibrary.name(it.path) }
+        BlueprintItemInteractions.initialize()
         BlueprintPreviewSettings.initialize()
         BlueprintThumbnails.initialize(BlueprintPreviewSettings.current.style)
         ResourceLoader.get(PackType.CLIENT_RESOURCES).registerReloadListener(
@@ -38,6 +40,7 @@ object BlueprintItemsClient : ClientModInitializer {
         BlueprintLibrary.onRefresh = BlueprintThumbnails::refresh
         BlueprintHoverPreview.initialize()
         BlueprintCreativeUi.initialize()
+        ClientTickEvents.START_CLIENT_TICK.register { placement.tick() }
         ClientTickEvents.END_CLIENT_TICK.register { Axiom613Adapter.inputTick() }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
             placement.invalidate()
@@ -46,6 +49,7 @@ object BlueprintItemsClient : ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STOPPING.register {
             BlueprintPreviewSettings.close()
             placement.close()
+            Axiom613Adapter.clearImportedPreview()
             BlueprintLibrary.close()
             BlueprintThumbnails.close()
         }

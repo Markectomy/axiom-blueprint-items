@@ -63,6 +63,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
 
     @Override
     public void runTest(ClientGameTestContext context) {
+        if (System.getProperty("blueprints.localhostControl") != null) return;
         try (TestSingleplayerContext world = context.worldBuilder().adjustSettings(settings -> {
             settings.setGameMode(WorldCreationUiState.SelectedGameMode.CREATIVE);
             settings.setAllowCommands(true);
@@ -100,6 +101,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 checkpoint("preview settings and optional Mod Menu integration");
                 BlueprintSettingsChecks.run(context, reference);
                 checkpoint("inventory persistence");
+                BlueprintPaperChecks.run(context, reference);
                 verifyInventoryAndPersistence(world, reference);
                 checkpoint("creative tab placement and collision");
                 verifyCreativeTabPosition(context);

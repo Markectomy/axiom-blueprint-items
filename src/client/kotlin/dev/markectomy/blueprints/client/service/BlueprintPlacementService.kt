@@ -5,6 +5,8 @@ import dev.markectomy.blueprints.client.integration.Axiom613Adapter
 import dev.markectomy.blueprints.data.LibraryPaths
 import dev.markectomy.blueprints.domain.BlueprintReference
 import net.minecraft.client.Minecraft
+import net.minecraft.client.multiplayer.ClientLevel
+import net.minecraft.client.player.LocalPlayer
 import net.minecraft.core.BlockPos
 import net.minecraft.network.chat.Component
 import net.minecraft.world.InteractionHand
@@ -18,19 +20,20 @@ import org.slf4j.LoggerFactory
 
 /** One outstanding source load; only the final client-thread handoff can start a preview. */
 class BlueprintPlacementService : AutoCloseable {
+    private class PendingLoad(val player: LocalPlayer, val level: ClientLevel)
+
     private val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1)) { task ->
         Thread(task, "blueprint-item-loader").apply { isDaemon = true }
     }
-    private var generation = 0L
-    private var loading = false
+    private var pendingLoad: PendingLoad? = null
     private var closed = false
 
     fun use(reference: BlueprintReference) {
         val client = Minecraft.getInstance()
         val player = client.player ?: return
         val level = client.level ?: return
-        if (!client.hasSingleplayerServer() || !player.isCreative) {
-            message("Blueprint items currently work in singleplayer creative mode.")
+        if (!player.isCreative) {
+            message("Blueprint items require creative mode.")
             return
         }
         if (!Axiom613Adapter.isAvailable()) {
@@ -41,10 +44,10 @@ class BlueprintPlacementService : AutoCloseable {
             message("Confirm or cancel your current Axiom placement first.")
             return
         }
-        if (loading || closed) return
+        if (pendingLoad != null || closed) return
         val root = Axiom613Adapter.libraryRoot()
-        val request = ++generation
-        loading = true
+        val request = PendingLoad(player, level)
+        pendingLoad = request
         message("Loading ${reference.name}…")
         try {
             worker.execute {
@@ -53,10 +56,10 @@ class BlueprintPlacementService : AutoCloseable {
                     Axiom613Adapter.prepare(path)
                 }
                 client.execute completion@ {
-                    if (request != generation || closed) return@completion
-                    loading = false
-                    if (client.player !== player || client.level !== level || !client.hasSingleplayerServer() ||
-                        !player.isCreative || Axiom613Adapter.libraryRoot() != root ||
+                    if (pendingLoad !== request || closed) return@completion
+                    pendingLoad = null
+                    if (client.player !== player || client.level !== level || !player.isCreative ||
+                        !Axiom613Adapter.isAvailable() || Axiom613Adapter.libraryRoot() != root ||
                         InteractionHand.entries.none { BlueprintItems.reference(player.getItemInHand(it)) == reference }
                     ) return@completion
                     result.fold(
@@ -85,14 +88,22 @@ class BlueprintPlacementService : AutoCloseable {
                 }
             }
         } catch (_: RejectedExecutionException) {
-            loading = false
+            if (pendingLoad === request) pendingLoad = null
         }
     }
 
+    fun tick() {
+        Axiom613Adapter.validateImportedPreview()
+        val request = pendingLoad ?: return
+        val client = Minecraft.getInstance()
+        if (client.player !== request.player || client.level !== request.level ||
+            !request.player.isCreative || !Axiom613Adapter.isAvailable()
+        ) invalidate()
+    }
+
     fun invalidate() {
-        generation++
+        pendingLoad = null
         worker.queue.clear()
-        loading = false
     }
 
     override fun close() {

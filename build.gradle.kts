@@ -93,3 +93,9 @@ tasks.withType<Jar>().configureEach {
     from("LICENSE") { into("META-INF") }
 }
 tasks.test { useJUnitPlatform() }
+
+tasks.named<JavaExec>("runClientGameTest") {
+    if (providers.gradleProperty("localhostTest").orElse("false").get().toBoolean()) {
+        systemProperty("blueprints.localhostControl", layout.projectDirectory.file(".private/localhost-test/controller.json").asFile.absolutePath)
+    }
+}

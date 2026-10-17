@@ -7,7 +7,7 @@
   "authors": ["markectomy"],
   "license": "MIT",
   "icon": "assets/axiom_blueprint_items/icon.png",
-  "environment": "*",
+  "environment": "client",
   "mixins": [
     {"config": "axiom_blueprint_items.client.mixins.json", "environment": "client"},
     {"config": "axiom_blueprint_items.axiom.mixins.json", "environment": "client"}
