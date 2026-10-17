@@ -57,37 +57,48 @@ Entity-only blueprints are currently unsupported.
 
 ## Item previews
 
-Blueprint icons rotate through 16 views over four seconds in the inventory,
-hotbar, hand, and dropped items. These are simplified, shaded voxel miniatures
-using Minecraft map colors, rather than full block textures or exact block models.
-Colors therefore do not change with resource packs. Large builds are reduced to
-at most 24 samples along their longest axis; each view is 64 × 64 pixels.
-
-Previews are generated only for items being displayed, on one background worker.
-The saved Axiom thumbnail appears while generation is pending. Over-budget or
-unreadable builds keep that thumbnail; missing or invalid images use a paper icon.
-Preview generation has separate limits of 32 MiB per source file, 32 MiB of
-accounted build NBT, and 512 source sections. These limits do not affect placement.
-
-Up to 64 rotating previews are held in memory, using about 16 MiB of GPU textures
-and 16 MiB of image pixels, plus temporary generation data and vanilla item caches.
-The disk cache is limited to 32 MiB and 512 files under
-`.cache/axiom-blueprint-items/previews` in the game directory. Source edits refresh
-previews when the library is refreshed. Unchanged sources reuse their cached views.
-
 With the optional **Mod Menu** mod installed, open **Mods → Axiom Blueprint Items
-→ Configure** and choose **Static** or **3D** under **Item previews**. Changes apply
-immediately and are saved automatically. Static uses Axiom's saved thumbnail;
-3D uses the rotating voxel miniature. Mod Menu 20.0.3 is tested with Minecraft 26.2.
-No additional configuration library is needed.
+→ Configure** and choose an **Item previews** preset. Changes apply immediately
+and save automatically. Mod Menu 20.0.3 is tested with Minecraft 26.2.
 
-Without Mod Menu, set `animatedPreviews` to `false` for static or `true` for 3D in
-`config/axiom-blueprint-items.json`, then restart Minecraft. Existing preferences
-are preserved. The file is created on first launch. Deleting the preview cache is
-safe; displayed previews regenerate.
+- **High quality** (default): the actual blueprint's textured block models and
+  fluids rotate continuously, rendered through Axiom into a 512 × 512 texture
+  with linear sampling. Geometry is cached without voxel reduction. Hover over
+  an item to see an enlarged rotating preview.
+- **Lightweight**: the earlier simplified, shaded voxel miniature. It uses
+  Minecraft map colors, at most 24 samples along the longest axis, and 16 cached
+  64-pixel views over a four-second rotation. Colors do not follow resource packs.
+- **Static**: Axiom's saved thumbnail, without rotation.
 
-Blueprint loading is limited to 128 MiB files and 4096 source chunks. Exceptionally
-large or corrupt files are rejected. The integration targets Axiom 6.1.3 exactly.
+High quality reads source files on one background worker and prepares a limited
+number of mesh sections per frame. Prepared geometry and framebuffers are reused;
+rotation does not reload the blueprint or rebuild its mesh. The cache holds at
+most 64 full-detail previews, with a 384 MiB GPU budget and a combined limit of
+16,777,215 retained blocks. This mode costs more than Lightweight or Static.
+
+High quality follows resource-pack block models and textures. It uses Axiom's
+native block-and-fluid preview renderer; separate saved entities and special
+block-entity renderers are not included in item images. Placement behavior is
+unchanged. Sources remain limited to 128 MiB and 4096 source sections.
+
+A saved thumbnail appears during loading or when a full-detail preview cannot be
+prepared within the renderer/cache limits. The enlarged preview labels loading
+and unavailable states. It never substitutes reduced voxel geometry for the High
+quality preset. Source edits are reread when the library is refreshed; unchanged
+sources keep their ready previews. Graphics resources are released on resource
+reload and shutdown.
+
+Lightweight generation is separately limited to 32 MiB source files, 32 MiB of
+accounted build NBT, and 512 source sections. Its atlas cache holds 64 rotating
+previews, using about 16 MiB of GPU textures and 16 MiB of image pixels. Its disk
+cache is limited to 32 MiB and 512 files under
+`.cache/axiom-blueprint-items/previews` in the game directory. Missing or invalid
+saved images use a paper icon. Deleting this cache is safe.
+
+Without Mod Menu, edit `previewStyle` in `config/axiom-blueprint-items.json` to
+`"high_quality"`, `"lightweight"`, or `"static"`, then restart Minecraft. Older
+`animatedPreviews: false` preferences remain Static; older enabled preferences
+upgrade to High quality. Unknown configuration fields are preserved.
 
 ## Building
 

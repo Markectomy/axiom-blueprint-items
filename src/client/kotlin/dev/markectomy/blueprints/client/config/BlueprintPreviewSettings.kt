@@ -1,6 +1,7 @@
 package dev.markectomy.blueprints.client.config
 
 import dev.markectomy.blueprints.client.render.BlueprintThumbnails
+import dev.markectomy.blueprints.domain.PreviewStyle
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.Minecraft
 import org.slf4j.LoggerFactory
@@ -35,10 +36,12 @@ object BlueprintPreviewSettings : AutoCloseable {
         initialized = true
     }
 
-    fun setEnabled(enabled: Boolean) {
-        if (closed || (current.enabled == enabled && !saveFailed)) return
-        current = PreviewSettings(enabled)
-        BlueprintThumbnails.setAnimated(enabled)
+    fun setEnabled(enabled: Boolean) = setStyle(if (enabled) PreviewStyle.HIGH_QUALITY else PreviewStyle.STATIC)
+
+    fun setStyle(style: PreviewStyle) {
+        if (closed || (current.style == style && !saveFailed)) return
+        current = PreviewSettings(style)
+        BlueprintThumbnails.setStyle(style)
         persist()
     }
 

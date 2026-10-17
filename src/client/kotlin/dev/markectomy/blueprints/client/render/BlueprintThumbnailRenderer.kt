@@ -36,10 +36,10 @@ class BlueprintThumbnailRenderer : SpecialModelRenderer<ThumbnailArgument> {
         val columns = image?.columns ?: 1
         val frame = image?.frame ?: 0
         val u0 = (frame % columns).toFloat() / columns
-        val v0 = (frame / columns).toFloat() / columns
+        val v0 = if (image?.highQuality == true) 1f else (frame / columns).toFloat() / columns
         val u1 = u0 + 1f / columns
-        val v1 = v0 + 1f / columns
-        submitNodeCollector.submitCustomGeometry(poseStack, RenderTypes.itemCutout(texture)) { pose, buffer ->
+        val v1 = if (image?.highQuality == true) 0f else v0 + 1f / columns
+        submitNodeCollector.submitCustomGeometry(poseStack, if (image?.highQuality == true) RenderTypes.itemTranslucent(texture) else RenderTypes.itemCutout(texture)) { pose, buffer ->
             fun vertex(x: Float, y: Float, u: Float, v: Float, z: Float, normal: Float) {
                 buffer.addVertex(pose, x, y, z).setColor(-1).setUv(u, v)
                     .setOverlay(overlayCoords).setLight(lightCoords).setNormal(pose, 0f, 0f, normal)

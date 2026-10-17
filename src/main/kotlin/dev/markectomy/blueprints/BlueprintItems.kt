@@ -14,10 +14,12 @@ import net.minecraft.resources.ResourceKey
 import net.minecraft.world.InteractionHand
 import net.minecraft.world.InteractionResult
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.inventory.tooltip.TooltipComponent
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
 import net.minecraft.world.item.CreativeModeTab
 import net.minecraft.world.level.Level
+import java.util.Optional
 
 object BlueprintItems : ModInitializer {
     const val MOD_ID: String = "axiom_blueprint_items"
@@ -38,6 +40,7 @@ object BlueprintItems : ModInitializer {
     /** Client supplies immutable library snapshots; the integrated server needs no filesystem access. */
     var libraryItems: () -> List<BlueprintReference> = { emptyList() }
     var nameResolver: (BlueprintReference) -> String? = { null }
+    var tooltipImage: (BlueprintReference) -> TooltipComponent? = { null }
     val TAB: CreativeModeTab = Registry.register(
         BuiltInRegistries.CREATIVE_MODE_TAB,
         id("blueprints"),
@@ -62,6 +65,9 @@ object BlueprintItems : ModInitializer {
     private class BlueprintItem(properties: Properties) : Item(properties) {
         override fun getName(stack: ItemStack): Component =
             reference(stack)?.let { Component.literal(nameResolver(it) ?: it.name) } ?: super.getName(stack)
+
+        override fun getTooltipImage(stack: ItemStack): Optional<TooltipComponent> =
+            Optional.ofNullable(reference(stack)?.let(tooltipImage))
 
         override fun use(level: Level, player: Player, hand: InteractionHand): InteractionResult {
             if (!player.isCreative) {

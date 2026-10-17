@@ -5,6 +5,7 @@ import dev.markectomy.blueprints.BlueprintItems
 import dev.markectomy.blueprints.client.service.BlueprintPlacementService
 import dev.markectomy.blueprints.client.library.BlueprintLibrary
 import dev.markectomy.blueprints.client.render.BlueprintThumbnails
+import dev.markectomy.blueprints.client.ui.BlueprintHoverPreview
 import dev.markectomy.blueprints.client.ui.BlueprintCreativeUi
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents
@@ -24,7 +25,7 @@ object BlueprintItemsClient : ClientModInitializer {
         BlueprintItems.libraryItems = { BlueprintLibrary.snapshot.entries.map { it.reference } }
         BlueprintItems.nameResolver = { BlueprintLibrary.name(it.path) }
         BlueprintPreviewSettings.initialize()
-        BlueprintThumbnails.initialize(BlueprintPreviewSettings.current.enabled)
+        BlueprintThumbnails.initialize(BlueprintPreviewSettings.current.style)
         ResourceLoader.get(PackType.CLIENT_RESOURCES).registerReloadListener(
             BlueprintItems.id("thumbnail_cache"),
             object : SimpleReloadListener<Unit>() {
@@ -35,6 +36,7 @@ object BlueprintItemsClient : ClientModInitializer {
             },
         )
         BlueprintLibrary.onRefresh = BlueprintThumbnails::refresh
+        BlueprintHoverPreview.initialize()
         BlueprintCreativeUi.initialize()
         ClientTickEvents.END_CLIENT_TICK.register { Axiom613Adapter.inputTick() }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->

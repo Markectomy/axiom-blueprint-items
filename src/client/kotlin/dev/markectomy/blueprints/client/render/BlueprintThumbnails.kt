@@ -5,6 +5,7 @@ import dev.markectomy.blueprints.BlueprintItems
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter
 import dev.markectomy.blueprints.data.LibraryPaths
 import dev.markectomy.blueprints.data.preview.PreviewDiskCache
+import dev.markectomy.blueprints.domain.PreviewStyle
 import dev.markectomy.blueprints.domain.BlueprintReference
 import dev.markectomy.blueprints.domain.preview.VoxelTurntable
 import net.fabricmc.loader.api.FabricLoader
@@ -18,7 +19,7 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-data class ThumbnailView(val texture: Identifier?, val frame: Int = 0, val columns: Int = 1, val revision: Long = 0)
+data class ThumbnailView(val texture: Identifier?, val frame: Int = 0, val columns: Int = 1, val revision: Long = 0, val highQuality: Boolean = false)
 
 /** Client-thread cache; one bounded worker owns source IO, sampling and rasterization. */
 object BlueprintThumbnails : AutoCloseable {
@@ -38,26 +39,33 @@ object BlueprintThumbnails : AutoCloseable {
     }
     private val disk = PreviewDiskCache(FabricLoader.getInstance().gameDir.resolve(".cache/axiom-blueprint-items/previews"))
     private var registered = false
-    @Volatile private var enabled = true
+    @Volatile private var style = PreviewStyle.HIGH_QUALITY
     @Volatile private var generation = 0L
     @Volatile private var closed = false
     private var revision = 0L
 
-    fun initialize(animated: Boolean) {
+    fun initialize(style: PreviewStyle) {
         if (registered) return
-        enabled = animated
+        this.style = style
         SpecialModelRenderers.ID_MAPPER.put(BlueprintItems.id("thumbnail"), BlueprintThumbnailRenderer.Unbaked.CODEC)
         registered = true
     }
 
-    fun setAnimated(animated: Boolean) {
-        if (closed || enabled == animated) return
-        enabled = animated
+    fun setAnimated(animated: Boolean) = setStyle(if (animated) PreviewStyle.HIGH_QUALITY else PreviewStyle.STATIC)
+
+    fun setStyle(style: PreviewStyle) {
+        if (closed || this.style == style) return
+        this.style = style
         invalidate()
     }
 
     /** Nonblocking lookup; only the bounded angle joins vanilla's GUI model cache key. */
     fun view(reference: BlueprintReference): ThumbnailView {
+        val fallback = savedView(reference)
+        return if (style == PreviewStyle.HIGH_QUALITY) HighQualityPreviews.view(reference, fallback) else fallback
+    }
+
+    private fun savedView(reference: BlueprintReference): ThumbnailView {
         if (closed) return ThumbnailView(null)
         val key = Key(Axiom613Adapter.libraryRoot().toAbsolutePath().normalize(), reference.path)
         val entry = cache[key]
@@ -71,12 +79,14 @@ object BlueprintThumbnails : AutoCloseable {
 
     /** Keep ready textures while checking whether their sources have changed. */
     fun refresh() {
+        HighQualityPreviews.refresh()
         generation++
         pending.clear()
         worker.queue.clear()
     }
 
     fun invalidate() {
+        HighQualityPreviews.invalidate()
         refresh()
         cache.values.forEach { release(it.image) }
         cache.clear()
@@ -85,13 +95,14 @@ object BlueprintThumbnails : AutoCloseable {
     override fun close() {
         if (closed) return
         closed = true
+        HighQualityPreviews.close()
         invalidate()
         worker.shutdownNow()
     }
 
     private fun request(key: Key, reference: BlueprintReference, previous: Entry?) {
         val request = generation
-        val animated = enabled
+        val animated = style == PreviewStyle.LIGHTWEIGHT
         pending.add(key)
         try {
             worker.execute {

@@ -3,6 +3,8 @@
   "package": "dev.markectomy.blueprints.client.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "BlueprintAnimationMixin",
+    "BlueprintFrameMixin",
     "ContainerScreenAccess",
     "CreativeScreenAccess",
     "CreativeScreenMixin",

@@ -102,6 +102,16 @@ object Axiom613Adapter {
         return PreparedBlueprint(raw, region)
     }
 
+    /** Worker-only: retain every visible source block, excluding selection air padding. */
+    fun prepareIconRegion(path: Path): ChunkedBlockRegion {
+        val raw = readRaw(path, MAX_FILE, MAX_DECOMPRESSED, MAX_CHUNKS)
+        val region = ChunkedBlockRegion(false)
+        forEachPreviewBlock(raw) { x, y, z, state -> region.addBlockWithoutDirty(x, y, z, state) }
+        if (region.isEmpty) throw IOException("Blueprint has no visible blocks")
+        region.dirtyAll()
+        return region
+    }
+
     /** Worker-only: bounded color samples, independent of world state and rendering resources. */
     fun preparePreview(path: Path): VoxelPreview {
         val raw = readRaw(path, MAX_PREVIEW_FILE, MAX_PREVIEW_DECOMPRESSED, MAX_PREVIEW_CHUNKS)

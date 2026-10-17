@@ -92,6 +92,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 BlueprintReference reference = new BlueprintReference(1, fixture.getFileName().toString(), "Placement proof");
                 checkpoint("rotating preview cache and fallback");
                 BlueprintPreviewChecks.run(context, fixture, reference);
+                checkpoint("full-detail textured previews and smooth GUI animation");
+                BlueprintHighQualityChecks.run(context, world, fixture.getParent());
                 checkpoint("preview settings and optional Mod Menu integration");
                 BlueprintSettingsChecks.run(context, reference);
                 checkpoint("inventory persistence");

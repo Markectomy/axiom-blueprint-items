@@ -1,6 +1,7 @@
 package dev.markectomy.blueprints.client.ui
 
 import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings
+import dev.markectomy.blueprints.domain.PreviewStyle
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.components.CycleButton
@@ -11,8 +12,7 @@ import net.minecraft.util.FormattedCharSequence
 
 class BlueprintSettingsScreen(private val parent: Screen?) :
     Screen(Component.translatable("config.axiom_blueprint_items.title")) {
-    private var staticDescription: List<FormattedCharSequence> = emptyList()
-    private var rotatingDescription: List<FormattedCharSequence> = emptyList()
+    private var descriptions: Map<PreviewStyle, List<FormattedCharSequence>> = emptyMap()
     private var saveError: List<FormattedCharSequence> = emptyList()
     private var titleY = 0
     private var descriptionY = 0
@@ -22,10 +22,11 @@ class BlueprintSettingsScreen(private val parent: Screen?) :
     override fun init() {
         val contentWidth = (width - 24).coerceIn(20, 240)
         val left = (width - contentWidth) / 2
-        staticDescription = font.split(Component.translatable("config.axiom_blueprint_items.static.description"), contentWidth)
-        rotatingDescription = font.split(Component.translatable("config.axiom_blueprint_items.rotating.description"), contentWidth)
+        descriptions = PreviewStyle.entries.associateWith { style ->
+            font.split(Component.translatable("config.axiom_blueprint_items.${style.serializedName}.description"), contentWidth)
+        }
         saveError = font.split(Component.translatable("config.axiom_blueprint_items.save_failed"), contentWidth)
-        val descriptionHeight = maxOf(staticDescription.size, rotatingDescription.size) * font.lineHeight
+        val descriptionHeight = descriptions.values.maxOf { it.size } * font.lineHeight
         val statusHeight = maxOf(saveError.size, 1) * font.lineHeight
         val contentHeight = font.lineHeight + 14 + 20 + 10 + descriptionHeight + 12 + statusHeight + 8 + 20 + 6 + 20
         titleY = ((height - contentHeight) / 2).coerceAtLeast(6)
@@ -35,13 +36,13 @@ class BlueprintSettingsScreen(private val parent: Screen?) :
         val retryY = statusY + statusHeight + 8
 
         addRenderableWidget(
-            CycleButton.booleanBuilder(
-                Component.translatable("config.axiom_blueprint_items.rotating"),
-                Component.translatable("config.axiom_blueprint_items.static"),
-                BlueprintPreviewSettings.current.enabled
-            ).create(left, modeY, contentWidth, 20, Component.translatable("config.axiom_blueprint_items.mode")) { _, enabled ->
-                BlueprintPreviewSettings.setEnabled(enabled)
-            }
+            CycleButton.builder<PreviewStyle>(
+                { style -> Component.translatable("config.axiom_blueprint_items.${style.serializedName}") },
+                BlueprintPreviewSettings.current.style
+            ).withValues(listOf(PreviewStyle.HIGH_QUALITY, PreviewStyle.LIGHTWEIGHT, PreviewStyle.STATIC))
+                .create(left, modeY, contentWidth, 20, Component.translatable("config.axiom_blueprint_items.mode")) { _, style ->
+                    BlueprintPreviewSettings.setStyle(style)
+                }
         )
         retryButton = addRenderableWidget(
             Button.builder(Component.translatable("config.axiom_blueprint_items.retry")) {
@@ -69,7 +70,7 @@ class BlueprintSettingsScreen(private val parent: Screen?) :
         }
         super.extractRenderState(graphics, mouseX, mouseY, delta)
         graphics.centeredText(font, title, width / 2, titleY, -1)
-        val description = if (BlueprintPreviewSettings.current.enabled) rotatingDescription else staticDescription
+        val description = descriptions.getValue(BlueprintPreviewSettings.current.style)
         description.forEachIndexed { index, line ->
             graphics.centeredText(font, line, width / 2, descriptionY + index * font.lineHeight, 0xFFCCCCCC.toInt())
         }

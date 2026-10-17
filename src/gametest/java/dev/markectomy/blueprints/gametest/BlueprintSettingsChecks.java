@@ -1,5 +1,6 @@
 package dev.markectomy.blueprints.gametest;
 
+import com.google.gson.JsonParser;
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.markectomy.blueprints.BlueprintItems;
 import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings;
@@ -7,6 +8,7 @@ import dev.markectomy.blueprints.client.config.PreviewSettings;
 import dev.markectomy.blueprints.client.render.BlueprintThumbnails;
 import dev.markectomy.blueprints.client.ui.BlueprintSettingsScreen;
 import dev.markectomy.blueprints.domain.BlueprintReference;
+import dev.markectomy.blueprints.domain.PreviewStyle;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,7 +35,7 @@ final class BlueprintSettingsChecks {
     static void run(ClientGameTestContext context, BlueprintReference reference) throws IOException {
         Path settings = FabricLoader.getInstance().getConfigDir().resolve(PreviewSettings.FILE_NAME);
         byte[] original = Files.exists(settings) ? Files.readAllBytes(settings) : null;
-        boolean enabled = context.computeOnClient(client -> BlueprintPreviewSettings.INSTANCE.getCurrent().getEnabled());
+        PreviewStyle previousStyle = context.computeOnClient(client -> BlueprintPreviewSettings.INSTANCE.getCurrent().getStyle());
         Screen previous = context.computeOnClient(client -> client.gui.screen());
         Screen parent = context.computeOnClient(client -> new ParentScreen());
         int[] window = context.computeOnClient(client -> new int[] {
@@ -41,21 +43,27 @@ final class BlueprintSettingsChecks {
         });
         try {
             context.runOnClient(client -> {
-                BlueprintPreviewSettings.INSTANCE.setEnabled(true);
+                BlueprintPreviewSettings.INSTANCE.setStyle(PreviewStyle.HIGH_QUALITY);
                 client.gui.setScreen(configurationScreen(parent));
                 require(client.gui.screen() instanceof BlueprintSettingsScreen, "Config factory did not open blueprint settings");
-                require(mode(client).getValue().equals(Boolean.TRUE), "Settings did not show the current 3D mode");
+                require(mode(client).getValue() == PreviewStyle.HIGH_QUALITY, "Settings did not show the current High quality mode");
             });
-            waitForPreview(context, reference, 4);
+            waitForPreview(context, reference, PreviewStyle.HIGH_QUALITY);
+            waitForSave(context);
+            requireSavedStyle(settings, PreviewStyle.HIGH_QUALITY);
+            context.runOnClient(client -> selectMode(client, PreviewStyle.LIGHTWEIGHT));
+            waitForPreview(context, reference, PreviewStyle.LIGHTWEIGHT);
+            waitForSave(context);
+            requireSavedStyle(settings, PreviewStyle.LIGHTWEIGHT);
             NativeImage animated = context.computeOnClient(client -> pixels(client, reference));
             context.runOnClient(client -> {
-                clickMode(client);
+                selectMode(client, PreviewStyle.STATIC);
                 require(!BlueprintPreviewSettings.INSTANCE.getCurrent().getEnabled(), "Static mode did not apply immediately");
                 require(animated.isClosed(), "Changing preview mode leaked the old animated atlas");
             });
-            waitForPreview(context, reference, 1);
-            context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving() && !BlueprintPreviewSettings.INSTANCE.getSaveFailed());
-            require(!PreviewSettings.Companion.load(settings).getEnabled(), "Static mode was not persisted for the next launch");
+            waitForPreview(context, reference, PreviewStyle.STATIC);
+            waitForSave(context);
+            requireSavedStyle(settings, PreviewStyle.STATIC);
             context.runOnClient(client -> {
                 var view = BlueprintThumbnails.INSTANCE.view(reference);
                 require(view.getFrame() == 0, "Static settings retained an animated frame");
@@ -67,22 +75,24 @@ final class BlueprintSettingsChecks {
             context.runOnClient(client -> {
                 require(client.gui.screen() == parent, "Done did not return to the parent screen");
                 client.gui.setScreen(configurationScreen(parent));
-                require(mode(client).getValue().equals(Boolean.FALSE), "Reopening settings lost the static selection");
-                clickMode(client);
-                require(BlueprintPreviewSettings.INSTANCE.getCurrent().getEnabled(), "3D mode did not apply immediately");
+                require(mode(client).getValue() == PreviewStyle.STATIC, "Reopening settings lost the static selection");
+                selectMode(client, PreviewStyle.HIGH_QUALITY);
+                require(BlueprintPreviewSettings.INSTANCE.getCurrent().getStyle() == PreviewStyle.HIGH_QUALITY,
+                    "High quality mode did not apply immediately");
             });
-            waitForPreview(context, reference, 4);
-            context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving() && !BlueprintPreviewSettings.INSTANCE.getSaveFailed());
-            require(PreviewSettings.Companion.load(settings).getEnabled(), "3D mode was not persisted for the next launch");
-            verifyWindow(context, 1280, 720, 3, "blueprint-settings-3d");
+            waitForPreview(context, reference, PreviewStyle.HIGH_QUALITY);
+            waitForSave(context);
+            requireSavedStyle(settings, PreviewStyle.HIGH_QUALITY);
+            verifyWindow(context, 1280, 720, 3, "blueprint-settings-high-quality");
 
             context.runOnClient(client -> {
                 for (int change = 0; change < 30; change++) clickMode(client);
-                require(BlueprintPreviewSettings.INSTANCE.getCurrent().getEnabled(), "Rapid clicks lost the final preview choice");
-                require(mode(client).getValue().equals(Boolean.TRUE), "Rapid clicks desynchronized the native control");
+                require(BlueprintPreviewSettings.INSTANCE.getCurrent().getStyle() == PreviewStyle.HIGH_QUALITY,
+                    "Rapid clicks lost the final preview choice");
+                require(mode(client).getValue() == PreviewStyle.HIGH_QUALITY, "Rapid clicks desynchronized the native control");
             });
-            context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving() && !BlueprintPreviewSettings.INSTANCE.getSaveFailed());
-            require(PreviewSettings.Companion.load(settings).getEnabled(), "An earlier queued save overwrote the latest choice");
+            waitForSave(context);
+            requireSavedStyle(settings, PreviewStyle.HIGH_QUALITY);
             verifySaveRetry(context, settings, reference);
             context.runOnClient(client -> {
                 require(client.gui.screen().keyPressed(new KeyEvent(GLFW.GLFW_KEY_ESCAPE, 0, 0)), "Escape was not handled");
@@ -92,7 +102,7 @@ final class BlueprintSettingsChecks {
                 require(client.gui.screen() == null, "Settings with no parent did not close");
             });
         } finally {
-            context.runOnClient(client -> BlueprintPreviewSettings.INSTANCE.setEnabled(enabled));
+            context.runOnClient(client -> BlueprintPreviewSettings.INSTANCE.setStyle(previousStyle));
             context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving());
             if (original == null) Files.deleteIfExists(settings);
             else Files.write(settings, original);
@@ -109,20 +119,20 @@ final class BlueprintSettingsChecks {
         byte[] valid = Files.readAllBytes(settings);
         String malformed = "{not valid json";
         Files.writeString(settings, malformed);
-        context.runOnClient(BlueprintSettingsChecks::clickMode);
+        context.runOnClient(client -> selectMode(client, PreviewStyle.STATIC));
         context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving() && BlueprintPreviewSettings.INSTANCE.getSaveFailed());
         require(Files.readString(settings).equals(malformed), "A failed save overwrote the malformed config file");
-        waitForPreview(context, reference, 1);
+        waitForPreview(context, reference, PreviewStyle.STATIC);
         context.waitFor(client -> Screens.getWidgets(client.gui.screen()).stream().anyMatch(widget -> widget.visible && widget.active
             && widget.getMessage().getString().equals(Component.translatable("config.axiom_blueprint_items.retry").getString())));
         context.takeScreenshot("blueprint-settings-save-error");
         Files.write(settings, valid);
         context.clickScreenButton("config.axiom_blueprint_items.retry");
-        context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving() && !BlueprintPreviewSettings.INSTANCE.getSaveFailed());
-        require(!PreviewSettings.Companion.load(settings).getEnabled(), "Retry did not save the still-active static choice");
-        context.runOnClient(BlueprintSettingsChecks::clickMode);
-        context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving() && !BlueprintPreviewSettings.INSTANCE.getSaveFailed());
-        waitForPreview(context, reference, 4);
+        waitForSave(context);
+        requireSavedStyle(settings, PreviewStyle.STATIC);
+        context.runOnClient(client -> selectMode(client, PreviewStyle.HIGH_QUALITY));
+        waitForSave(context);
+        waitForPreview(context, reference, PreviewStyle.HIGH_QUALITY);
     }
 
     private static Screen configurationScreen(Screen parent) {
@@ -183,11 +193,39 @@ final class BlueprintSettingsChecks {
         client.gui.screen().mouseReleased(click);
     }
 
-    private static void waitForPreview(ClientGameTestContext context, BlueprintReference reference, int columns) {
+    private static void selectMode(Minecraft client, PreviewStyle style) {
+        for (int click = 0; click < 3 && mode(client).getValue() != style; click++) clickMode(client);
+        require(mode(client).getValue() == style, "Native preview control did not select " + style);
+        require(BlueprintPreviewSettings.INSTANCE.getCurrent().getStyle() == style,
+            "Native preview control did not apply " + style);
+    }
+
+    private static void waitForPreview(ClientGameTestContext context, BlueprintReference reference, PreviewStyle style) {
         context.waitFor(client -> {
             var view = BlueprintThumbnails.INSTANCE.view(reference);
-            return view.getTexture() != null && view.getColumns() == columns;
+            return view.getTexture() != null
+                && view.getColumns() == (style == PreviewStyle.LIGHTWEIGHT ? 4 : 1)
+                && view.getHighQuality() == (style == PreviewStyle.HIGH_QUALITY);
         });
+        context.runOnClient(client -> require(
+            BlueprintItems.INSTANCE.getITEM().getTooltipImage(BlueprintItems.INSTANCE.createStack(reference)).isPresent()
+                == (style == PreviewStyle.HIGH_QUALITY),
+            "Enlarged hover preview visibility did not match " + style));
+    }
+
+    private static void waitForSave(ClientGameTestContext context) {
+        context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving() && !BlueprintPreviewSettings.INSTANCE.getSaveFailed());
+    }
+
+    private static void requireSavedStyle(Path settings, PreviewStyle style) throws IOException {
+        var loaded = PreviewSettings.Companion.load(settings);
+        require(loaded.getStyle() == style, "Saved preview preset did not survive reopening: " + style);
+        require(loaded.getEnabled() == (style != PreviewStyle.STATIC), "Legacy preview opt-out no longer matches the preset");
+        var saved = JsonParser.parseString(Files.readString(settings)).getAsJsonObject();
+        require(saved.get("previewStyle").getAsString().equals(style.getSerializedName()),
+            "Saved preview preset did not use its stable serialized name");
+        require(saved.get("animatedPreviews").getAsBoolean() == (style != PreviewStyle.STATIC),
+            "Saved legacy preview preference was not synchronized");
     }
 
     private static NativeImage pixels(Minecraft client, BlueprintReference reference) {

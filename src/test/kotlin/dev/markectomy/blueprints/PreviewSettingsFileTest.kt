@@ -2,6 +2,7 @@ package dev.markectomy.blueprints
 
 import com.google.gson.JsonParser
 import dev.markectomy.blueprints.data.PreviewSettingsFile
+import dev.markectomy.blueprints.domain.PreviewStyle
 import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
@@ -21,18 +22,19 @@ class PreviewSettingsFileTest {
     @TempDir lateinit var temporaryDirectory: Path
 
     @Test
-    fun `first load creates defaults and existing false survives loading`() {
+    fun `first load creates high quality defaults and existing false survives loading`() {
         val path = temporaryDirectory.resolve("config/axiom-blueprint-items.json")
-        assertTrue(PreviewSettingsFile(path).load())
+        assertEquals(PreviewStyle.HIGH_QUALITY, PreviewSettingsFile(path).loadStyle())
         assertTrue(Files.isRegularFile(path))
+        assertEquals("high_quality", JsonParser.parseString(Files.readString(path)).asJsonObject["previewStyle"].asString)
         Files.writeString(path, """{"animatedPreviews":false}""")
         val original = Files.readAllBytes(path)
-        assertFalse(PreviewSettingsFile(path).load())
+        assertEquals(PreviewStyle.STATIC, PreviewSettingsFile(path).loadStyle())
         assertContentEquals(original, Files.readAllBytes(path))
     }
 
     @Test
-    fun `both preview modes survive reopening with no temporary files left`() {
+    fun `legacy boolean choices still save and reopen`() {
         val path = temporaryDirectory.resolve("config/axiom-blueprint-items.json")
         PreviewSettingsFile(path).save(false)
         assertFalse(PreviewSettingsFile(path).load())
@@ -43,13 +45,71 @@ class PreviewSettingsFileTest {
     }
 
     @Test
+    fun `all presets persist independently and synchronize the legacy preference`() {
+        val path = temporaryDirectory.resolve("config/settings.json")
+        val settings = PreviewSettingsFile(path)
+        val choices = listOf(
+            PreviewStyle.LIGHTWEIGHT to "lightweight",
+            PreviewStyle.STATIC to "static",
+            PreviewStyle.HIGH_QUALITY to "high_quality"
+        )
+        for ((style, serializedName) in choices) {
+            settings.save(style)
+            assertEquals(style, PreviewSettingsFile(path).loadStyle())
+            val saved = JsonParser.parseString(Files.readString(path)).asJsonObject
+            assertEquals(serializedName, saved["previewStyle"].asString)
+            assertEquals(style != PreviewStyle.STATIC, saved["animatedPreviews"].asBoolean)
+        }
+        assertEquals(listOf(path), Files.list(path.parent).use { it.toList() })
+    }
+
+    @Test
+    fun `legacy and invalid preset values migrate without rewriting user data`() {
+        val path = temporaryDirectory.resolve("settings.json")
+        val inputs = listOf(
+            """{"animatedPreviews":false}""" to PreviewStyle.STATIC,
+            "// Existing preference\n{\"animatedPreviews\":false}" to PreviewStyle.STATIC,
+            """{"animatedPreviews":true}""" to PreviewStyle.HIGH_QUALITY,
+            """{}""" to PreviewStyle.HIGH_QUALITY,
+            """{"animatedPreviews":"false"}""" to PreviewStyle.HIGH_QUALITY,
+            """{"previewStyle":"future_style","animatedPreviews":false}""" to PreviewStyle.STATIC,
+            """{"previewStyle":"future_style","animatedPreviews":true}""" to PreviewStyle.HIGH_QUALITY,
+            """{"previewStyle":false}""" to PreviewStyle.HIGH_QUALITY,
+            """{"previewStyle":null,"animatedPreviews":false}""" to PreviewStyle.STATIC,
+            """{"previewStyle":[],"animatedPreviews":false}""" to PreviewStyle.STATIC
+        )
+        for ((content, expected) in inputs) {
+            Files.writeString(path, content)
+            val original = Files.readAllBytes(path)
+            assertEquals(expected, PreviewSettingsFile(path).loadStyle())
+            assertEquals(expected, PreviewSettingsFile(path).loadStyle())
+            assertContentEquals(original, Files.readAllBytes(path))
+        }
+    }
+
+    @Test
+    fun `explicit preset takes priority over conflicting legacy boolean`() {
+        val path = temporaryDirectory.resolve("settings.json")
+        val inputs = listOf(
+            """{"previewStyle":"static","animatedPreviews":true}""" to PreviewStyle.STATIC,
+            """{"previewStyle":"lightweight","animatedPreviews":false}""" to PreviewStyle.LIGHTWEIGHT,
+            """{"previewStyle":"high_quality","animatedPreviews":false}""" to PreviewStyle.HIGH_QUALITY
+        )
+        for ((content, expected) in inputs) {
+            Files.writeString(path, content)
+            assertEquals(expected, PreviewSettingsFile(path).loadStyle())
+        }
+    }
+
+    @Test
     fun `saving preserves unknown nested values including null`() {
         val path = temporaryDirectory.resolve("settings.json")
         Files.writeString(path, """{"animatedPreviews":false,"future":{"label":"é<&>","values":[null,4,true]},"unused":null}""")
         val original = JsonParser.parseString(Files.readString(path)).asJsonObject
-        PreviewSettingsFile(path).save(true)
+        PreviewSettingsFile(path).save(PreviewStyle.LIGHTWEIGHT)
         val saved = JsonParser.parseString(Files.readString(path)).asJsonObject
         assertTrue(saved["animatedPreviews"].asBoolean)
+        assertEquals("lightweight", saved["previewStyle"].asString)
         assertEquals(original["future"], saved["future"])
         assertTrue(saved.has("unused"))
         assertEquals(original["unused"], saved["unused"])

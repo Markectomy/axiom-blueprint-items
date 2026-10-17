@@ -2,10 +2,12 @@ package dev.markectomy.blueprints.gametest;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.markectomy.blueprints.BlueprintItems;
+import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings;
 import dev.markectomy.blueprints.client.config.PreviewSettings;
 import dev.markectomy.blueprints.client.render.BlueprintThumbnailRenderer;
 import dev.markectomy.blueprints.client.render.BlueprintThumbnails;
 import dev.markectomy.blueprints.domain.BlueprintReference;
+import dev.markectomy.blueprints.domain.PreviewStyle;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -31,10 +33,13 @@ final class BlueprintPreviewChecks {
     static void run(ClientGameTestContext context, Path fixture, BlueprintReference reference) throws IOException {
         Path oversized = Files.createTempFile(fixture.getParent(), "addon-large-preview-", ".bp");
         Path settings = oversized.resolveSibling(oversized.getFileName() + ".json");
+        PreviewStyle previousStyle = context.computeOnClient(client -> BlueprintPreviewSettings.INSTANCE.getCurrent().getStyle());
         try {
             verifySettings(settings);
-            context.runOnClient(client -> client.player.setItemInHand(InteractionHand.MAIN_HAND,
-                BlueprintItems.INSTANCE.createStack(reference)));
+            context.runOnClient(client -> {
+                BlueprintPreviewSettings.INSTANCE.setStyle(PreviewStyle.LIGHTWEIGHT);
+                client.player.setItemInHand(InteractionHand.MAIN_HAND, BlueprintItems.INSTANCE.createStack(reference));
+            });
             waitForAnimated(context, reference);
             Snapshot initial = context.computeOnClient(client -> snapshot(client, reference));
             context.runOnClient(client -> {
@@ -93,7 +98,11 @@ final class BlueprintPreviewChecks {
                     "Oversized preview lost or inverted its saved thumbnail fallback");
             });
         } finally {
-            context.runOnClient(client -> BlueprintThumbnails.INSTANCE.invalidate());
+            context.runOnClient(client -> {
+                BlueprintPreviewSettings.INSTANCE.setStyle(previousStyle);
+                BlueprintThumbnails.INSTANCE.invalidate();
+            });
+            context.waitFor(client -> !BlueprintPreviewSettings.INSTANCE.getSaving());
             Files.deleteIfExists(oversized);
             Files.deleteIfExists(settings);
         }
@@ -144,15 +153,12 @@ final class BlueprintPreviewChecks {
     }
 
     private static void verifyDisabledPreviews(ClientGameTestContext context, BlueprintReference reference) {
-        boolean previous = context.computeOnClient(client -> {
-            boolean enabled = setAnimationEnabled(false);
-            BlueprintThumbnails.INSTANCE.invalidate();
-            return enabled;
-        });
+        PreviewStyle previous = context.computeOnClient(client -> BlueprintPreviewSettings.INSTANCE.getCurrent().getStyle());
+        context.runOnClient(client -> BlueprintPreviewSettings.INSTANCE.setStyle(PreviewStyle.STATIC));
         try {
             context.waitFor(client -> {
                 var view = BlueprintThumbnails.INSTANCE.view(reference);
-                return view.getTexture() != null && view.getColumns() == 1;
+                return view.getTexture() != null && view.getColumns() == 1 && !view.getHighQuality();
             });
             Snapshot initial = context.computeOnClient(client -> snapshot(client, reference));
             context.runOnClient(client -> {
@@ -170,23 +176,11 @@ final class BlueprintPreviewChecks {
             });
         } finally {
             context.runOnClient(client -> {
-                setAnimationEnabled(previous);
+                BlueprintPreviewSettings.INSTANCE.setStyle(previous);
                 BlueprintThumbnails.INSTANCE.invalidate();
             });
         }
-        if (previous) waitForAnimated(context, reference);
-    }
-
-    private static boolean setAnimationEnabled(boolean enabled) {
-        try {
-            var field = BlueprintThumbnails.class.getDeclaredField("enabled");
-            field.setAccessible(true);
-            boolean previous = field.getBoolean(BlueprintThumbnails.INSTANCE);
-            field.setBoolean(BlueprintThumbnails.INSTANCE, enabled);
-            return previous;
-        } catch (ReflectiveOperationException exception) {
-            throw new AssertionError("Cannot exercise the preview animation opt-out", exception);
-        }
+        if (previous == PreviewStyle.LIGHTWEIGHT) waitForAnimated(context, reference);
     }
 
     private static void verifySettings(Path path) throws IOException {
@@ -205,7 +199,7 @@ final class BlueprintPreviewChecks {
     private static void waitForAnimated(ClientGameTestContext context, BlueprintReference reference) {
         context.waitFor(client -> {
             var view = BlueprintThumbnails.INSTANCE.view(reference);
-            return view.getTexture() != null && view.getColumns() == 4;
+            return view.getTexture() != null && view.getColumns() == 4 && !view.getHighQuality();
         });
     }
 

@@ -4,10 +4,14 @@
   "config.axiom_blueprint_items.title": "Axiom Blueprint Items",
   "config.axiom_blueprint_items.mode": "Item previews",
   "config.axiom_blueprint_items.static": "Static",
-  "config.axiom_blueprint_items.rotating": "3D",
+  "config.axiom_blueprint_items.lightweight": "Lightweight",
+  "config.axiom_blueprint_items.high_quality": "High quality",
   "config.axiom_blueprint_items.static.description": "Show Axiom's saved thumbnail. Uses the fewest resources.",
-  "config.axiom_blueprint_items.rotating.description": "Show a rotating, simplified 3D miniature. Uses the saved thumbnail while loading or when a build is too large.",
+  "config.axiom_blueprint_items.lightweight.description": "Show a simplified colored miniature at four frames per second. Uses fewer resources.",
+  "config.axiom_blueprint_items.high_quality.description": "Show a smoothly rotating preview with the blueprint's block models and textures. Uses the saved thumbnail while loading.",
   "config.axiom_blueprint_items.saving": "Saving…",
   "config.axiom_blueprint_items.save_failed": "Could not save settings. Check the config file.",
-  "config.axiom_blueprint_items.retry": "Retry save"
+  "config.axiom_blueprint_items.retry": "Retry save",
+  "tooltip.axiom_blueprint_items.preview.loading": "Loading 3D preview…",
+  "tooltip.axiom_blueprint_items.preview.unavailable": "3D preview unavailable"
 }

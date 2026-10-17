@@ -6,6 +6,7 @@ import com.google.gson.JsonParser
 import com.google.gson.Strictness
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
+import dev.markectomy.blueprints.domain.PreviewStyle
 import java.io.IOException
 import java.io.StringReader
 import java.nio.ByteBuffer
@@ -19,27 +20,37 @@ import java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
 import java.nio.file.StandardOpenOption.WRITE
 
 class PreviewSettingsFile(private val path: Path) {
-    fun load(): Boolean {
+    fun load(): Boolean = loadStyle() != PreviewStyle.STATIC
+
+    fun loadStyle(): PreviewStyle {
         if (Files.notExists(path)) {
             runCatching {
                 path.parent?.let { Files.createDirectories(it) }
                 Files.writeString(path, DEFAULT_CONTENT, CREATE_NEW, WRITE)
             }
-            return true
+            return PreviewStyle.HIGH_QUALITY
         }
         return runCatching {
-            val root = JsonParser.parseString(readBounded().toString(Charsets.UTF_8))
-            val value = root.takeIf { it.isJsonObject }?.asJsonObject?.get(PROPERTY)
-            value?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive
-                ?.takeIf { it.isBoolean }?.asBoolean ?: true
-        }.getOrDefault(true)
+            val root = JsonParser.parseString(readBounded().toString(Charsets.UTF_8)).asJsonObject
+            val savedStyle = root.get(STYLE_PROPERTY)?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive
+                ?.takeIf { it.isString }?.asString
+            PreviewStyle.fromSerializedName(savedStyle) ?: run {
+                val enabled = root.get(LEGACY_PROPERTY)?.takeIf { it.isJsonPrimitive }?.asJsonPrimitive
+                    ?.takeIf { it.isBoolean }?.asBoolean ?: true
+                if (enabled) PreviewStyle.HIGH_QUALITY else PreviewStyle.STATIC
+            }
+        }.getOrDefault(PreviewStyle.HIGH_QUALITY)
     }
 
     @Throws(IOException::class)
-    fun save(enabled: Boolean) {
+    fun save(enabled: Boolean) = save(if (enabled) PreviewStyle.HIGH_QUALITY else PreviewStyle.STATIC)
+
+    @Throws(IOException::class)
+    fun save(style: PreviewStyle) {
         try {
             val root = if (Files.notExists(path)) JsonObject() else readObject()
-            root.addProperty(PROPERTY, enabled)
+            root.addProperty(STYLE_PROPERTY, style.serializedName)
+            root.addProperty(LEGACY_PROPERTY, style != PreviewStyle.STATIC)
             val bytes = (JSON.toJson(root) + "\n").toByteArray(Charsets.UTF_8)
             if (bytes.size > MAX_BYTES) throw IOException("Preview settings exceed the 64 KiB limit")
 
@@ -82,8 +93,9 @@ class PreviewSettingsFile(private val path: Path) {
 
     companion object {
         private const val MAX_BYTES = 64 * 1024
-        private const val PROPERTY = "animatedPreviews"
-        private const val DEFAULT_CONTENT = "{\n  \"animatedPreviews\": true\n}\n"
+        private const val STYLE_PROPERTY = "previewStyle"
+        private const val LEGACY_PROPERTY = "animatedPreviews"
+        private const val DEFAULT_CONTENT = "{\n  \"previewStyle\": \"high_quality\",\n  \"animatedPreviews\": true\n}\n"
         private val JSON = GsonBuilder().serializeNulls().setPrettyPrinting().disableHtmlEscaping().create()
     }
 }
