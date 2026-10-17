@@ -14,8 +14,10 @@
   ],
   "entrypoints": {
     "main": [{"adapter": "kotlin", "value": "dev.markectomy.blueprints.BlueprintItems"}],
-    "client": [{"adapter": "kotlin", "value": "dev.markectomy.blueprints.client.BlueprintItemsClient"}]
+    "client": [{"adapter": "kotlin", "value": "dev.markectomy.blueprints.client.BlueprintItemsClient"}],
+    "modmenu": ["dev.markectomy.blueprints.client.integration.modmenu.BlueprintModMenu"]
   },
+  "suggests": {"modmenu": "*"},
   "depends": {
     "minecraft": "26.2",
     "java": ">=25",

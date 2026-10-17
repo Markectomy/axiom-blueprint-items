@@ -1,5 +1,6 @@
 package dev.markectomy.blueprints.client
 
+import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings
 import dev.markectomy.blueprints.BlueprintItems
 import dev.markectomy.blueprints.client.service.BlueprintPlacementService
 import dev.markectomy.blueprints.client.library.BlueprintLibrary
@@ -22,7 +23,8 @@ object BlueprintItemsClient : ClientModInitializer {
         BlueprintItems.useHandler = placement::use
         BlueprintItems.libraryItems = { BlueprintLibrary.snapshot.entries.map { it.reference } }
         BlueprintItems.nameResolver = { BlueprintLibrary.name(it.path) }
-        BlueprintThumbnails.initialize()
+        BlueprintPreviewSettings.initialize()
+        BlueprintThumbnails.initialize(BlueprintPreviewSettings.current.enabled)
         ResourceLoader.get(PackType.CLIENT_RESOURCES).registerReloadListener(
             BlueprintItems.id("thumbnail_cache"),
             object : SimpleReloadListener<Unit>() {
@@ -40,6 +42,7 @@ object BlueprintItemsClient : ClientModInitializer {
             Axiom613Adapter.clearImportedPreview()
         }
         ClientLifecycleEvents.CLIENT_STOPPING.register {
+            BlueprintPreviewSettings.close()
             placement.close()
             BlueprintLibrary.close()
             BlueprintThumbnails.close()

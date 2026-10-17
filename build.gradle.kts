@@ -11,6 +11,7 @@ group = property("maven_group")!!
 
 repositories {
     mavenCentral()
+    maven("https://maven.terraformersmc.com/releases/") { content { includeGroup("com.terraformersmc") } }
     maven("https://api.modrinth.com/maven")
 }
 
@@ -55,6 +56,10 @@ dependencies {
     // development library classifier does not mistake Axiom for a logging library.
     "clientImplementation"("org.slf4j:slf4j-api:2.0.17")
     "clientImplementation"("maven.modrinth:axiom:Sc1qsNWg")
+    "clientCompileOnly"("com.terraformersmc:modmenu:20.0.3")
+    if (providers.gradleProperty("withModMenu").orElse("true").get().toBoolean()) {
+        "clientRuntimeOnly"("com.terraformersmc:modmenu:20.0.3")
+    }
     add(axiomDistribution.name, "maven.modrinth:axiom:Sc1qsNWg")
     "clientCompileOnly"(files(layout.buildDirectory.file("axiom-api/axiomclientapi-unobf.jar")).builtBy(extractAxiomClientApi))
     testImplementation(kotlin("test"))

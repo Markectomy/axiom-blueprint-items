@@ -75,9 +75,16 @@ The disk cache is limited to 32 MiB and 512 files under
 `.cache/axiom-blueprint-items/previews` in the game directory. Source edits refresh
 previews when the library is refreshed. Unchanged sources reuse their cached views.
 
-To use the original static thumbnails, set `animatedPreviews` to `false` in
-`config/axiom-blueprint-items.json` and restart Minecraft. The file is created on
-first launch. Deleting the preview cache is safe; displayed previews regenerate.
+With the optional **Mod Menu** mod installed, open **Mods → Axiom Blueprint Items
+→ Configure** and choose **Static** or **3D** under **Item previews**. Changes apply
+immediately and are saved automatically. Static uses Axiom's saved thumbnail;
+3D uses the rotating voxel miniature. Mod Menu 20.0.3 is tested with Minecraft 26.2.
+No additional configuration library is needed.
+
+Without Mod Menu, set `animatedPreviews` to `false` for static or `true` for 3D in
+`config/axiom-blueprint-items.json`, then restart Minecraft. Existing preferences
+are preserved. The file is created on first launch. Deleting the preview cache is
+safe; displayed previews regenerate.
 
 Blueprint loading is limited to 128 MiB files and 4096 source chunks. Exceptionally
 large or corrupt files are rejected. The integration targets Axiom 6.1.3 exactly.
@@ -92,7 +99,9 @@ With JDK 25 installed:
 
 The jar is written to `build/libs/`. Run the isolated client regression test with
 `./gradlew runClientGameTest --warning-mode all`, or launch the development client
-with `./gradlew runClient`.
+with `./gradlew runClient`. Mod Menu is included only in the development runtime;
+the addon does not bundle or require it. Test without Mod Menu using
+`./gradlew runClientGameTest -PwithModMenu=false --warning-mode all`.
 
 The build fetches Axiom for development; it does not bundle Axiom in the addon.
 Kotlin and Java compiler warnings are treated as errors.

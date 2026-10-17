@@ -1,4 +1,13 @@
 {
   "item.axiom_blueprint_items.blueprint": "Blueprint",
-  "itemGroup.axiom_blueprint_items.blueprints": "Blueprints"
+  "itemGroup.axiom_blueprint_items.blueprints": "Blueprints",
+  "config.axiom_blueprint_items.title": "Axiom Blueprint Items",
+  "config.axiom_blueprint_items.mode": "Item previews",
+  "config.axiom_blueprint_items.static": "Static",
+  "config.axiom_blueprint_items.rotating": "3D",
+  "config.axiom_blueprint_items.static.description": "Show Axiom's saved thumbnail. Uses the fewest resources.",
+  "config.axiom_blueprint_items.rotating.description": "Show a rotating, simplified 3D miniature. Uses the saved thumbnail while loading or when a build is too large.",
+  "config.axiom_blueprint_items.saving": "Saving…",
+  "config.axiom_blueprint_items.save_failed": "Could not save settings. Check the config file.",
+  "config.axiom_blueprint_items.retry": "Retry save"
 }

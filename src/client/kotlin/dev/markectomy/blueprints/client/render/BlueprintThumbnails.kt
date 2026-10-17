@@ -2,7 +2,6 @@ package dev.markectomy.blueprints.client.render
 
 import com.mojang.blaze3d.platform.NativeImage
 import dev.markectomy.blueprints.BlueprintItems
-import dev.markectomy.blueprints.client.config.PreviewSettings
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter
 import dev.markectomy.blueprints.data.LibraryPaths
 import dev.markectomy.blueprints.data.preview.PreviewDiskCache
@@ -39,16 +38,22 @@ object BlueprintThumbnails : AutoCloseable {
     }
     private val disk = PreviewDiskCache(FabricLoader.getInstance().gameDir.resolve(".cache/axiom-blueprint-items/previews"))
     private var registered = false
-    private var enabled = true
+    @Volatile private var enabled = true
     @Volatile private var generation = 0L
     @Volatile private var closed = false
     private var revision = 0L
 
-    fun initialize() {
+    fun initialize(animated: Boolean) {
         if (registered) return
-        enabled = PreviewSettings.load(FabricLoader.getInstance().configDir.resolve(PreviewSettings.FILE_NAME)).enabled
+        enabled = animated
         SpecialModelRenderers.ID_MAPPER.put(BlueprintItems.id("thumbnail"), BlueprintThumbnailRenderer.Unbaked.CODEC)
         registered = true
+    }
+
+    fun setAnimated(animated: Boolean) {
+        if (closed || enabled == animated) return
+        enabled = animated
+        invalidate()
     }
 
     /** Nonblocking lookup; only the bounded angle joins vanilla's GUI model cache key. */
@@ -86,6 +91,7 @@ object BlueprintThumbnails : AutoCloseable {
 
     private fun request(key: Key, reference: BlueprintReference, previous: Entry?) {
         val request = generation
+        val animated = enabled
         pending.add(key)
         try {
             worker.execute {
@@ -99,7 +105,7 @@ object BlueprintThumbnails : AutoCloseable {
                         }
                         return@execute
                     }
-                    if (enabled) {
+                    if (animated) {
                         val saved = disk.read(stamp)
                         if (saved != null && disk.keyFor(path) == stamp) {
                             complete(request, key) { upload(key, saved, true, stamp, request) }
@@ -111,7 +117,7 @@ object BlueprintThumbnails : AutoCloseable {
                     Minecraft.getInstance().execute {
                         if (active(request)) upload(key, fallback, false, stamp, request)
                     }
-                    val atlas = if (enabled && active(request)) runCatching {
+                    val atlas = if (animated && active(request)) runCatching {
                         VoxelTurntable.render(Axiom613Adapter.preparePreview(path)).copyPixels()
                     }.getOrNull() else null
                     if (!active(request)) return@execute
