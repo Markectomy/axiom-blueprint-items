@@ -29,7 +29,9 @@ Minecraft GUI textures, so resource packs can change its appearance.
 
 Take a blueprint item into your inventory and right-click the air. This starts
 Axiom's Clone preview in its tenth hotbar slot and keeps you in creative mode.
-Release the initial click before confirming.
+The preview starts with its lowest blocks at the target height, above a targeted
+ground block. Release the initial click before confirming. You can still move the
+preview downward with Axiom's controls.
 
 - Scroll to move the preview.
 - Middle-click to move it to the target.

@@ -108,6 +108,7 @@ object Axiom613Adapter {
     /** Client/render-thread-only. Caller must revalidate player/session and creative singleplayer. */
     fun start(prepared: PreparedBlueprint, position: BlockPos): Boolean {
         if (!isAvailable() || isPlacing() || prepared.region.isEmpty) return false
+        val minimum = prepared.region.min() ?: return false
         val tools = BuilderToolManager.getTools()
         val index = tools.indexOfFirst { it is CloneBuilderTool }
         if (index < 0) return false
@@ -116,7 +117,9 @@ object Axiom613Adapter {
         BuilderToolManager.setToolSlotActive(true)
         if (!BuilderToolManager.isToolSlotActive() || !BuilderToolManager.selectedToolIs(CloneBuilderTool::class.java)) return false
         val clone = tools[index] as CloneBuilderTool
-        (clone as BlueprintCloneBridge).`blueprints$start`(prepared.raw, prepared.region, position)
+        // Saved coordinates are relative to the blueprint origin, which may be above its base.
+        val offset = position.offset(0, -minimum.y, 0)
+        (clone as BlueprintCloneBridge).`blueprints$start`(prepared.raw, prepared.region, offset)
         importedClone = clone
         return true
     }

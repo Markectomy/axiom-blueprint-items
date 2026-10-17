@@ -66,8 +66,15 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         }).create()) {
             world.getServer().runCommand("fill -8 96 -8 8 108 12 air");
             world.getServer().runCommand("tp @a 0 100 0 0 0");
-            world.getServer().runOnServer(server -> server.getPlayerList().getPlayers().forEach(player -> player.setNoGravity(true)));
-            context.waitFor(client -> client.player != null && client.player.isCreative() && Math.abs(client.player.getY() - 100) < 1
+            world.getServer().runOnServer(server -> server.getPlayerList().getPlayers().forEach(player -> {
+                player.setNoGravity(true);
+                player.getAbilities().mayfly = true;
+                player.getAbilities().flying = true;
+                player.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+                player.onUpdateAbilities();
+            }));
+            context.waitFor(client -> client.player != null && client.player.isCreative() && client.player.getAbilities().flying
+                && Math.abs(client.player.getY() - 100) < 1
                 && AxiomClient.isAxiomActive() && AxiomClient.hasPermission(AxiomPermission.BUILD_SECTION));
             // Axiom opens its first-run introduction over a newly created world.
             context.runOnClient(client -> {
@@ -77,6 +84,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             context.waitTicks(2);
             Path fixture = context.computeOnClient(client -> {
                 client.player.setNoGravity(true);
+                client.player.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
                 return Files.createTempFile(Axiom613Adapter.INSTANCE.libraryRoot(), "addon-gametest-", ".bp");
             });
             try {
@@ -92,6 +100,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 verifyThumbnailOrientation(context, fixture);
                 checkpoint("existing builder selection preserved");
                 verifyExistingSelectionPreserved(context, fixture);
+                checkpoint("surface anchoring with negative, zero, and positive source Y");
+                verifySurfaceAnchoring(context, world, fixture.getParent());
                 context.runOnClient(client -> {
                     ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
                     client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
@@ -465,6 +475,85 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         } finally {
             Files.deleteIfExists(invalid);
         }
+    }
+
+    private static void verifySurfaceAnchoring(ClientGameTestContext context, TestSingleplayerContext world, Path library) throws IOException {
+        BlockPos support = new BlockPos(0, 98, 2);
+        world.getServer().runCommand("setblock 0 98 2 bedrock");
+        context.waitFor(client -> client.level.getBlockState(support).is(Blocks.BEDROCK));
+        try {
+            for (int minimumY : new int[] {-3, 0, 2}) {
+                Path file = Files.createTempFile(library, "addon-surface-", ".bp");
+                try {
+                    context.runOnClient(client -> {
+                        ChunkedBlockRegion region = new ChunkedBlockRegion();
+                        region.addBlockWithoutDirty(0, minimumY, 0, Blocks.STONE.defaultBlockState());
+                        region.addBlockWithoutDirty(1, minimumY + 2, 0, Blocks.LAPIS_BLOCK.defaultBlockState());
+                        region.addBlockWithoutDirty(0, minimumY + 5, 2, Blocks.GOLD_BLOCK.defaultBlockState());
+                        region.dirtyAll();
+                        BlueprintHeader header = new BlueprintHeader("Surface anchor " + minimumY, "automated test", List.of(), 0, 0, false, 3, false);
+                        try (NativeImage thumbnail = new NativeImage(1, 1, true); OutputStream output = Files.newOutputStream(file)) {
+                            BlueprintIo.write(output, header, thumbnail, region, new Long2ObjectOpenHashMap<CompressedBlockEntity>(), List.of());
+                        }
+                        BuilderToolManager.setToolSlotActive(false);
+                    });
+                    context.runOnClient(client -> client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                        new net.minecraft.world.phys.Vec3(support.getX() + 0.5, support.getY() + 0.95, support.getZ() + 0.5)));
+                    context.waitTicks(2);
+                    context.waitFor(client -> client.hitResult instanceof net.minecraft.world.phys.BlockHitResult hit
+                        && hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK && hit.getBlockPos().equals(support)
+                        && hit.getDirection() == net.minecraft.core.Direction.UP);
+                    context.runOnClient(client -> {
+                        BlueprintReference reference = new BlueprintReference(1, file.getFileName().toString(), "Surface anchor " + minimumY);
+                        ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
+                        client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
+                        stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
+                    });
+                    context.waitFor(client -> cloneRegion() != null);
+                    context.runOnClient(client -> {
+                        assertBuilderMode(client);
+                        require(cloneRegion().min().getY() == minimumY, "Fixture lost its source vertical origin");
+                        require(cloneRegion().min().getY() + cloneOffset().getY() == support.getY() + 1,
+                            "Initial preview bottom did not rest on the hit surface for source minY=" + minimumY);
+                    });
+                    assertOnlySupport(world, support);
+                    context.getInput().lookAt(0, 90);
+                    context.runOnClient(client -> {
+                        int bottom = cloneRegion().min().getY() + cloneOffset().getY();
+                        require(cloneTool().scroll(1), "Native Clone did not handle downward scroll");
+                        require(cloneRegion().min().getY() + cloneOffset().getY() == bottom - 1,
+                            "Surface anchoring prevented manually lowering the preview");
+                    });
+                    assertOnlySupport(world, support);
+                    context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+                    context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
+                    context.runOnClient(client -> require(cloneRegion() == null && cloneOffset() == null,
+                        "Cancel retained surface-anchor preview data"));
+                    assertOnlySupport(world, support);
+                } finally {
+                    context.runOnClient(client -> {
+                        cloneTool().reset(false);
+                        BuilderToolManager.setToolSlotActive(false);
+                    });
+                    Files.deleteIfExists(file);
+                }
+            }
+        } finally {
+            world.getServer().runCommand("setblock 0 98 2 air");
+            context.waitFor(client -> client.level.getBlockState(support).isAir());
+            context.getInput().lookAt(0, 0);
+        }
+        assertWorldEmpty(world);
+    }
+
+    private static void assertOnlySupport(TestSingleplayerContext world, BlockPos support) {
+        world.getServer().runOnServer(server -> {
+            for (BlockPos position : BlockPos.betweenClosed(MIN, MAX)) {
+                var state = server.overworld().getBlockState(position);
+                require(position.equals(support) ? state.is(Blocks.BEDROCK) : state.isAir(),
+                    "Unconfirmed surface preview changed world at " + position);
+            }
+        });
     }
 
     private static void writeFixture(Path file) throws IOException {
