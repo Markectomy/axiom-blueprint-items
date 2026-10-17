@@ -233,7 +233,8 @@ object Axiom613Adapter {
         val bridge = placement.clone as BlueprintCloneBridge
         bridge.`blueprints$inputTick`()
         if (bridge.`blueprints$isImported`() &&
-            (!bridge.`blueprints$isConfirmed`() || Minecraft.getInstance().options.keyUse.isDown)
+            (placement.previousTool === placement.clone || !bridge.`blueprints$isConfirmed`() ||
+                Minecraft.getInstance().options.keyUse.isDown)
         ) return
         importedPlacement = null
         val tools = BuilderToolManager.getTools()

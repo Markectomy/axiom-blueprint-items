@@ -42,11 +42,16 @@ confirming. You can still move the preview downward with Axiom's controls.
 - Ctrl+R rotates; Ctrl+F flips.
 - Right-click confirms; left-click cancels.
 
-Once you release the confirming click, the preview closes and the tenth slot
-returns to your previously selected Axiom tool. Cancelling also restores that tool.
-Undo works through Axiom as usual. Manually switching tools during the preview
-cancels it without pasting and keeps the tool you chose. Existing builder selections
-and editor placements must be finished or cancelled before starting another blueprint.
+If Clone was already selected, the preview stays active after confirmation: move
+it and confirm again to place another copy, just like Axiom's normal Clone tool.
+Left-click finishes that preview. For any other original tool, releasing the
+confirming click closes the preview and restores that tool. Cancelling also
+restores the original tool.
+
+Undo works through Axiom as usual; finish an active repeat-copy preview first.
+Manually switching tools during the preview cancels it without pasting and keeps
+the tool you chose. Existing builder selections and editor placements must be
+finished or cancelled before starting another blueprint.
 
 ## Library links
 

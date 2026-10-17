@@ -189,6 +189,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 assertWorldEmpty(world);
                 checkpoint("same-tool restoration, slot exit, and disconnect cleanup");
                 verifyPlacementCleanup(context, world, fixture);
+                checkpoint("original Clone mode preserves repeat copies and separate undo");
+                verifyRepeatClone(context, world, reference);
                 checkpoint("all regressions passed");
             } finally {
                 context.runOnClient(client -> {
@@ -779,6 +781,62 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         assertRestoredTool(context, MoveBuilderTool.class);
         context.runOnClient(client -> require(!Axiom613Adapter.INSTANCE.isPlacing(),
             "Confirmation left a selection active in the restored Move tool"));
+        context.runOnClient(client -> UserAction.UNDO.call(null));
+        world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 0
+            && countTaggedEntities(server.overworld(), "blueprint_saved") == 0);
+        assertWorldEmpty(world);
+    }
+
+    private static void verifyRepeatClone(ClientGameTestContext context, TestSingleplayerContext world,
+                                          BlueprintReference reference) {
+        context.runOnClient(client -> {
+            selectBuilderTool(CloneBuilderTool.class);
+            BuilderToolManager.setToolSlotActive(false);
+            ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
+            client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
+            stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
+        });
+        context.waitFor(client -> cloneRegion() != null);
+        ChunkedBlockRegion original = context.computeOnClient(client -> cloneRegion());
+        BlockPos first = context.computeOnClient(client -> cloneOffset().immutable());
+        context.waitTicks(2);
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 3
+            && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);
+        context.waitTicks(3);
+        context.runOnClient(client -> {
+            assertBuilderMode(client);
+            require(cloneRegion() == original, "Original Clone mode lost its blueprint after confirmation");
+            require(Axiom613Adapter.INSTANCE.isPlacing(), "Original Clone mode stopped its repeat-copy preview");
+        });
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        context.waitTicks(3);
+        world.getServer().runOnServer(server -> require(countTaggedEntities(server.overworld(), "blueprint_saved") == 1,
+            "Confirming again without moving duplicated the saved entity"));
+        context.getInput().lookAt(-90, 0);
+        context.runOnClient(client -> require(cloneTool().scroll(4), "Native Clone could not move the next copy"));
+        BlockPos second = context.computeOnClient(client -> cloneOffset().immutable());
+        require(!first.equals(second), "Repeat-copy preview did not move");
+        world.getServer().runOnServer(server -> require(countFixtureBlocks(server.overworld()) == 3,
+            "Moving the repeat-copy preview changed the world before confirmation"));
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 6
+            && countTaggedEntities(server.overworld(), "blueprint_saved") == 2);
+        context.waitTicks(3);
+        context.runOnClient(client -> {
+            assertBuilderMode(client);
+            require(cloneRegion() == original, "Second copy replaced the reusable blueprint preview");
+        });
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
+        assertRestoredTool(context, CloneBuilderTool.class);
+        context.runOnClient(client -> UserAction.UNDO.call(null));
+        world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 3
+            && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);
+        world.getServer().runOnServer(server -> {
+            require(server.overworld().getBlockState(first).is(Blocks.STONE), "Undo removed the first copy");
+            require(server.overworld().getBlockState(second).isAir(), "Undo did not remove the second copy");
+        });
         context.runOnClient(client -> UserAction.UNDO.call(null));
         world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 0
             && countTaggedEntities(server.overworld(), "blueprint_saved") == 0);
