@@ -108,6 +108,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 verifyExistingSelectionPreserved(context, fixture);
                 checkpoint("surface anchoring with negative, zero, and positive source Y");
                 verifySurfaceAnchoring(context, world, fixture.getParent());
+                checkpoint("airborne targeting beyond interaction reach");
+                verifyAirborneTargeting(context, world, reference);
                 context.runOnClient(client -> {
                     ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
                     client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
@@ -561,6 +563,66 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                     "Unconfirmed surface preview changed world at " + position);
             }
         });
+    }
+
+    private static void verifyAirborneTargeting(ClientGameTestContext context, TestSingleplayerContext world,
+                                                BlueprintReference reference) {
+        BlockPos support = new BlockPos(0, 98, 2);
+        world.getServer().runCommand("setblock 0 98 2 bedrock");
+        context.waitFor(client -> client.level.getBlockState(support).is(Blocks.BEDROCK));
+        try {
+            for (BlockPos position : List.of(new BlockPos(0, 180, 0), new BlockPos(-48, 180, -32), new BlockPos(0, 500, 0))) {
+                world.getServer().runCommand("tp @a " + (double) position.getX() + " " + (double) position.getY() + " " + (double) position.getZ());
+                context.waitFor(client -> client.player.position().distanceToSqr(
+                    new net.minecraft.world.phys.Vec3(position.getX(), position.getY(), position.getZ())) < 0.01);
+                context.runOnClient(client -> client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                    new net.minecraft.world.phys.Vec3(support.getX() + 0.5, support.getY() + 0.95, support.getZ() + 0.5)));
+                context.waitTicks(2);
+                context.runOnClient(client -> {
+                    require(client.hitResult != null && client.hitResult.getType() == net.minecraft.world.phys.HitResult.Type.MISS,
+                        "Airborne fixture must aim beyond normal interaction reach");
+                    ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
+                    client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
+                    stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
+                });
+                context.waitFor(client -> cloneRegion() != null);
+                context.runOnClient(client -> {
+                    assertBuilderMode(client);
+                    require(cloneOffset().equals(support.above()),
+                        "Airborne preview missed aimed ground from " + position + ": " + cloneOffset());
+                    require(reference.equals(BlueprintItems.INSTANCE.reference(client.player.getMainHandItem())),
+                        "Airborne targeting changed the blueprint item");
+                });
+                assertOnlySupport(world, support);
+                context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+                context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
+                context.runOnClient(client -> BuilderToolManager.setToolSlotActive(false));
+            }
+            context.getInput().lookAt(0, -90);
+            context.runOnClient(client -> {
+                ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
+                client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
+                stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
+            });
+            context.waitFor(client -> cloneRegion() != null);
+            context.runOnClient(client -> require(cloneOffset().equals(BlockPos.containing(
+                client.player.getEyePosition().add(client.player.getLookAngle().scale(5.0)))),
+                "Aiming into empty sky no longer starts a nearby floating preview"));
+            assertOnlySupport(world, support);
+            context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+            context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
+        } finally {
+            context.runOnClient(client -> {
+                cloneTool().reset(false);
+                BuilderToolManager.setToolSlotActive(false);
+            });
+            world.getServer().runCommand("setblock 0 98 2 air");
+            context.waitFor(client -> client.level.getBlockState(support).isAir());
+            world.getServer().runCommand("tp @a 0.0 100.0 0.0 0 0");
+            context.waitFor(client -> client.player.position().distanceToSqr(new net.minecraft.world.phys.Vec3(0, 100, 0)) < 0.01);
+            context.getInput().lookAt(0, 0);
+        }
+        assertWorldEmpty(world);
     }
 
     private static void writeFixture(Path file) throws IOException {

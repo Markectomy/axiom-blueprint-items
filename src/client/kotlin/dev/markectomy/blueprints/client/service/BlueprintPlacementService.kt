@@ -64,7 +64,7 @@ class BlueprintPlacementService : AutoCloseable {
                             if (Axiom613Adapter.isPlacing()) {
                                 message("Confirm or cancel your current Axiom placement first.")
                             } else if (Axiom613Adapter.isAvailable()) {
-                                val hit = client.hitResult
+                                val hit = player.pick(SURFACE_TARGET_DISTANCE, 1.0f, false)
                                 val target = if (hit is BlockHitResult && hit.type == HitResult.Type.BLOCK) {
                                     hit.blockPos.relative(hit.direction)
                                 } else {
@@ -106,6 +106,7 @@ class BlueprintPlacementService : AutoCloseable {
     }
 
     companion object {
+        private const val SURFACE_TARGET_DISTANCE = 1024.0
         private val LOGGER = LoggerFactory.getLogger("AxiomBlueprintItems")
     }
 }
