@@ -21,6 +21,7 @@ import com.moulberry.axiom.world_modification.CompressedBlockEntity;
 import com.moulberry.axiom.world_modification.Dispatcher;
 import dev.markectomy.blueprints.BlueprintItems;
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter;
+import dev.markectomy.blueprints.client.integration.BlueprintCloneBridge;
 import dev.markectomy.blueprints.domain.BlueprintReference;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -112,7 +113,7 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
                 context.waitFor(client -> reference.equals(BlueprintItems.INSTANCE.reference(client.player.getInventory().getItem(0))));
                 control.await(context, "if items entity Player0 hotbar.0 " + predicate(reference), "reconnect persistence");
                 preparePlayer(context, control);
-                checkpoint("native preview, confirmation, saved entity, restoration, and undo");
+                checkpoint("native repeat placement, saved entities, finish, restoration, and separate undo");
                 verifyPlacement(context, control, reference);
                 checkpoint("server game-mode change cancels a pending preview");
                 verifyRevocation(context, control, reference);
@@ -269,6 +270,7 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
             require(BuilderToolManager.selectedToolIs(CloneBuilderTool.class) && BuilderToolManager.isToolSlotActive(),
                 "Remote item did not start tenth-slot Clone");
             require(cloneOffset().equals(TARGET), "Remote preview did not rest on the aimed floor: " + cloneOffset());
+            require(!((BlueprintCloneBridge) cloneTool()).blueprints$hasPlaced(), "Remote preview already shows Finish");
         });
         assertUnchanged(context, control);
         context.waitTicks(2);
@@ -278,8 +280,33 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
         control.command("scoreboard players set saved_count blueprint_test 0");
         control.command("execute as @e[tag=" + SAVED_ENTITY + "] run scoreboard players add saved_count blueprint_test 1");
         control.await(context, "if score saved_count blueprint_test matches 1", "exactly one saved entity per confirmation");
+        ChunkedBlockRegion original = context.computeOnClient(client -> cloneRegion());
+        context.waitTicks(3);
+        context.runOnClient(client -> {
+            require(Axiom613Adapter.INSTANCE.isPlacing() && BuilderToolManager.selectedToolIs(CloneBuilderTool.class),
+                "Remote confirmation ended the repeat-copy preview");
+            require(((BlueprintCloneBridge) cloneTool()).blueprints$hasPlaced(), "Remote confirmation did not enable Finish");
+        });
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        context.getInput().lookAt(-90, 0);
+        context.runOnClient(client -> {
+            require(cloneTool().scroll(4), "Remote next-copy preview could not move");
+            require(cloneOffset().equals(TARGET.offset(4, 0, 0)), "Remote next copy moved to an unexpected position");
+            require(((BlueprintCloneBridge) cloneTool()).blueprints$hasPlaced(), "Remote movement reverted Finish to Cancel");
+        });
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        control.await(context, "if block 4 99 3 stone if block 5 99 3 lapis_block if block 4 99 5 gold_block", "second remote copy");
+        control.command("scoreboard players set saved_count blueprint_test 0");
+        control.command("execute as @e[tag=" + SAVED_ENTITY + "] run scoreboard players add saved_count blueprint_test 1");
+        control.await(context, "if score saved_count blueprint_test matches 2", "one saved entity per remote copy");
+        context.runOnClient(client -> require(cloneRegion() == original, "Second remote copy replaced the reusable preview"));
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
         context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing() && BuilderToolManager.selectedToolIs(MoveBuilderTool.class));
+        context.runOnClient(client -> require(!((BlueprintCloneBridge) cloneTool()).blueprints$hasPlaced(), "Remote finish retained its hint state"));
         context.waitFor(client -> Dispatcher.getHistoryDataCount() > 0);
+        context.runOnClient(client -> UserAction.UNDO.call(null));
+        control.await(context, "if block 4 99 3 air if block 5 99 3 air if block 4 99 5 air"
+            + " if block 0 99 3 stone if entity @e[tag=" + SAVED_ENTITY + ",limit=1]", "undo only the second remote copy");
         context.runOnClient(client -> UserAction.UNDO.call(null));
         control.await(context, "if block 0 99 3 air if block 1 99 3 air if block 0 99 5 air"
             + " unless entity @e[tag=" + SAVED_ENTITY + "]", "native Axiom undo");

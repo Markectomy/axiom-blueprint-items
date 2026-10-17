@@ -1,6 +1,7 @@
 {
   "item.axiom_blueprint_items.blueprint": "Blueprint",
   "itemGroup.axiom_blueprint_items.blueprints": "Blueprints",
+  "placement.axiom_blueprint_items.place_copy": "Place copy",
   "config.axiom_blueprint_items.title": "Axiom Blueprint Items",
   "config.axiom_blueprint_items.mode": "Item previews",
   "config.axiom_blueprint_items.static": "Static",

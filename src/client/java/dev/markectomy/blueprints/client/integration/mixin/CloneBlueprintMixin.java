@@ -4,12 +4,14 @@ import dev.markectomy.blueprints.client.integration.BlueprintCloneBridge;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.moulberry.axiom.buildertools.BuilderTool;
 import com.moulberry.axiom.buildertools.BuilderToolManager;
 import com.moulberry.axiom.buildertools.BuilderToolSelectionState;
 import com.moulberry.axiom.buildertools.CloneBuilderTool;
 import com.moulberry.axiom.buildertools.PendingAction;
 import com.moulberry.axiom.blueprint.RawBlueprint;
 import com.moulberry.axiom.clipboard.SelectionBuffer;
+import com.moulberry.axiom.i18n.AxiomI18n;
 import com.moulberry.axiom.render.regions.ChunkedBlockRegion;
 import com.moulberry.axiom.utils.EntityDataUtils;
 import com.moulberry.axiom.utils.IntMatrix;
@@ -25,7 +27,9 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.resources.language.I18n;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.Entity;
@@ -55,6 +59,7 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
     @Shadow private Long2ObjectMap<CompressedBlockEntity> blockEntities;
     @Unique private List<CompoundTag> blueprints$entities;
     @Unique private boolean blueprints$waitForRelease;
+    @Unique private boolean blueprints$hasPlaced;
 
     @Override
     public void blueprints$start(RawBlueprint raw, ChunkedBlockRegion region, BlockPos position) {
@@ -71,6 +76,7 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
         regionOffset = new BlockPos.MutableBlockPos(position.getX(), position.getY(), position.getZ());
         blueprints$entities = raw.entities();
         blueprints$waitForRelease = true;
+        blueprints$hasPlaced = false;
     }
 
     @Override
@@ -84,8 +90,21 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
     }
 
     @Override
-    public boolean blueprints$isConfirmed() {
-        return blueprints$entities != null && reclone;
+    public boolean blueprints$hasPlaced() {
+        return blueprints$hasPlaced;
+    }
+
+    @Inject(method = "renderScreen", at = @At("HEAD"), cancellable = true)
+    private void blueprints$placementHints(GuiGraphicsExtractor graphics, int width, int height, float tickDelta,
+                                           CallbackInfo callback) {
+        if (blueprints$entities == null || blockRegion == null) return;
+        var options = Minecraft.getInstance().options;
+        String exitKey = blueprints$hasPlaced ? "axiom.buildertool.clone.finish" : "axiom.buildertool.cancel";
+        BuilderTool.renderKeybindHelp(graphics, width, height, AxiomI18n.get(exitKey), options.keyAttack, 0);
+        BuilderTool.renderKeybindHelp(graphics, width, height, I18n.get("placement.axiom_blueprint_items.place_copy"), options.keyUse, 1);
+        BuilderTool.renderKeybindHelp(graphics, width, height, AxiomI18n.get("axiom.buildertool.move_to"), options.keyPickItem, 2);
+        BuilderTool.renderScrollHelp(graphics, width, height, AxiomI18n.get("axiom.buildertool.clone.scroll"), 3);
+        callback.cancel();
     }
 
     @Inject(method = "rightClick", at = @At("HEAD"), cancellable = true)
@@ -102,6 +121,7 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
     private void blueprints$clearImportedState(boolean applySelection, CallbackInfo callback) {
         blueprints$entities = null;
         blueprints$waitForRelease = false;
+        blueprints$hasPlaced = false;
     }
 
     @Inject(method = "getSelectionRestore", at = @At("HEAD"), cancellable = true)
@@ -122,6 +142,7 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
                                              AdditionalUndoOperation undo, Operation<Void> original) {
         if (blueprints$entities == null || blueprints$entities.isEmpty() || !BuilderToolManager.copyEntities) {
             original.call(region, data, offset, description, modifiers, undo);
+            if (blueprints$entities != null) blueprints$hasPlaced = true;
             return;
         }
         List<AxiomServerboundSpawnEntity.SpawnEntry> spawns = new ArrayList<>();
@@ -142,5 +163,6 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
         RegionHelper.pushBlockRegionChangeOffset(region, data, offset, description, modifiers, entityUndo);
         if (!spawns.isEmpty()) new AxiomServerboundSpawnEntity(spawns).send();
         if (!changes.isEmpty()) new AxiomServerboundManipulateEntity(changes).send();
+        blueprints$hasPlaced = true;
     }
 }

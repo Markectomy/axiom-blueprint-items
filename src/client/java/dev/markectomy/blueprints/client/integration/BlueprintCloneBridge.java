@@ -9,5 +9,5 @@ public interface BlueprintCloneBridge {
     void blueprints$start(RawBlueprint raw, ChunkedBlockRegion region, BlockPos position);
     void blueprints$inputTick();
     boolean blueprints$isImported();
-    boolean blueprints$isConfirmed();
+    boolean blueprints$hasPlaced();
 }

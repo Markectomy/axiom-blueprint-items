@@ -41,7 +41,7 @@ class BlueprintPlacementService : AutoCloseable {
             return
         }
         if (Axiom613Adapter.isPlacing()) {
-            message("Confirm or cancel your current Axiom placement first.")
+            message("Finish or cancel your current Axiom placement first.")
             return
         }
         if (pendingLoad != null || closed) return
@@ -65,7 +65,7 @@ class BlueprintPlacementService : AutoCloseable {
                     result.fold(
                         onSuccess = { prepared ->
                             if (Axiom613Adapter.isPlacing()) {
-                                message("Confirm or cancel your current Axiom placement first.")
+                                message("Finish or cancel your current Axiom placement first.")
                             } else if (Axiom613Adapter.isAvailable()) {
                                 val hit = player.pick(SURFACE_TARGET_DISTANCE, 1.0f, false)
                                 val target = if (hit is BlockHitResult && hit.type == HitResult.Type.BLOCK) {
@@ -74,7 +74,7 @@ class BlueprintPlacementService : AutoCloseable {
                                     BlockPos.containing(player.eyePosition.add(player.lookAngle.scale(5.0)))
                                 }
                                 if (Axiom613Adapter.start(prepared, target)) {
-                                    message("${reference.name}: scroll to move; right-click to confirm, left-click to cancel.")
+                                    message(reference.name)
                                 } else {
                                     message("Axiom could not start its Clone preview. Check builder permissions and that the blueprint contains blocks.")
                                 }

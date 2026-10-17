@@ -28,6 +28,7 @@ import com.moulberry.axiom.world_modification.CompressedBlockEntity;
 import com.moulberry.axiom.world_modification.Dispatcher;
 import dev.markectomy.blueprints.BlueprintItems;
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter;
+import dev.markectomy.blueprints.client.integration.BlueprintCloneBridge;
 import dev.markectomy.blueprints.client.library.BlueprintLibrary;
 import dev.markectomy.blueprints.client.render.BlueprintThumbnails;
 import dev.markectomy.blueprints.domain.BlueprintReference;
@@ -124,6 +125,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 checkpoint("waiting for native Clone preview");
                 context.waitFor(client -> Axiom613Adapter.INSTANCE.isPlacing());
                 context.runOnClient(BlueprintPlacementGameTest::assertBuilderMode);
+                context.runOnClient(client -> require(!cloneBridge().blueprints$hasPlaced(), "New preview already shows Finish"));
                 assertWorldEmpty(world);
                 context.takeScreenshot("blueprint-pending-preview");
                 verifyUnreadableSourcesPreservePlacement(context, fixture);
@@ -178,7 +180,14 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                     && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);
                 world.getServer().runOnServer(server -> require(countTaggedEntities(server.overworld(), "blueprint_ambient") == 1,
                     "Imported Clone copied an unrelated entity from source-world bounds"));
-                checkpoint("previous tool restored after confirmation");
+                checkpoint("preview remains active until explicitly finished");
+                context.waitTicks(3);
+                context.runOnClient(client -> {
+                    assertBuilderMode(client);
+                    require(cloneBridge().blueprints$hasPlaced(), "Placed copy did not enable Finish");
+                    require(Axiom613Adapter.INSTANCE.isPlacing(), "Confirmation ended the reusable preview");
+                });
+                context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
                 assertRestoredTool(context, StackBuilderTool.class);
                 context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
                 context.waitFor(client -> Dispatcher.getHistoryDataCount() > 0);
@@ -191,8 +200,10 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 assertWorldEmpty(world);
                 checkpoint("same-tool restoration, slot exit, and disconnect cleanup");
                 verifyPlacementCleanup(context, world, fixture);
-                checkpoint("original Clone mode preserves repeat copies and separate undo");
-                verifyRepeatClone(context, world, reference);
+                checkpoint("repeat copies, explicit finish, and separate undo from Move, Stack, and Clone");
+                verifyRepeatPlacement(context, world, reference, MoveBuilderTool.class);
+                verifyRepeatPlacement(context, world, reference, StackBuilderTool.class);
+                verifyRepeatPlacement(context, world, reference, CloneBuilderTool.class);
                 checkpoint("all regressions passed");
             } finally {
                 context.runOnClient(client -> {
@@ -689,6 +700,10 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             .map(CloneBuilderTool.class::cast).findFirst().orElseThrow();
     }
 
+    private static BlueprintCloneBridge cloneBridge() {
+        return (BlueprintCloneBridge) cloneTool();
+    }
+
     private static Object cloneField(String name) {
         try {
             var field = CloneBuilderTool.class.getDeclaredField(name);
@@ -731,6 +746,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             require(client.player.isCreative() && !EditorUI.isEnabled() && !Placement.INSTANCE.isPlacing(),
                 "Restoring the previous builder tool changed game mode or opened the editor");
             require(cloneRegion() == null && cloneOffset() == null, "Finished blueprint retained native Clone preview data");
+            require(!cloneBridge().blueprints$hasPlaced(), "Finished blueprint retained its Finish hint");
         });
     }
 
@@ -763,7 +779,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         context.runOnClient(client -> {
             selectBuilderTool(MoveBuilderTool.class);
             require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
-                "Could not start Move restoration after confirmation");
+                "Could not start held-confirm proof");
         });
         context.waitTicks(2);
         context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
@@ -773,32 +789,41 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             context.waitTicks(10);
             context.runOnClient(client -> {
                 require(BuilderToolManager.selectedToolIs(CloneBuilderTool.class),
-                    "Confirm click reached the previous tool before its release");
+                    "Holding confirm left the repeat-copy preview");
             });
             world.getServer().runOnServer(server -> require(countTaggedEntities(server.overworld(), "blueprint_saved") == 1,
                 "Holding confirm pasted a second blueprint"));
         } finally {
             context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
         }
+        context.waitTicks(3);
+        context.runOnClient(client -> {
+            assertBuilderMode(client);
+            require(cloneBridge().blueprints$hasPlaced(), "Releasing confirm lost the Finish hint");
+            require(Axiom613Adapter.INSTANCE.isPlacing(), "Releasing confirm ended the repeat-copy preview");
+        });
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
         assertRestoredTool(context, MoveBuilderTool.class);
         context.runOnClient(client -> require(!Axiom613Adapter.INSTANCE.isPlacing(),
-            "Confirmation left a selection active in the restored Move tool"));
+            "Finishing left a selection active in the restored Move tool"));
         context.runOnClient(client -> UserAction.UNDO.call(null));
         world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 0
             && countTaggedEntities(server.overworld(), "blueprint_saved") == 0);
         assertWorldEmpty(world);
     }
 
-    private static void verifyRepeatClone(ClientGameTestContext context, TestSingleplayerContext world,
-                                          BlueprintReference reference) {
+    private static void verifyRepeatPlacement(ClientGameTestContext context, TestSingleplayerContext world,
+                                             BlueprintReference reference, Class<? extends BuilderTool> previousTool) {
+        context.getInput().lookAt(0, 0);
         context.runOnClient(client -> {
-            selectBuilderTool(CloneBuilderTool.class);
+            selectBuilderTool(previousTool);
             BuilderToolManager.setToolSlotActive(false);
             ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
             client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
             stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
         });
         context.waitFor(client -> cloneRegion() != null);
+        context.runOnClient(client -> require(!cloneBridge().blueprints$hasPlaced(), "New repeat preview retained a prior Finish hint"));
         ChunkedBlockRegion original = context.computeOnClient(client -> cloneRegion());
         BlockPos first = context.computeOnClient(client -> cloneOffset().immutable());
         context.waitTicks(2);
@@ -808,8 +833,9 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         context.waitTicks(3);
         context.runOnClient(client -> {
             assertBuilderMode(client);
-            require(cloneRegion() == original, "Original Clone mode lost its blueprint after confirmation");
-            require(Axiom613Adapter.INSTANCE.isPlacing(), "Original Clone mode stopped its repeat-copy preview");
+            require(cloneRegion() == original, "Confirmation discarded the reusable preview from " + previousTool.getSimpleName());
+            require(Axiom613Adapter.INSTANCE.isPlacing(), "Confirmation stopped the repeat-copy preview");
+            require(cloneBridge().blueprints$hasPlaced(), "First copy did not enable Finish");
         });
         context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
         context.waitTicks(3);
@@ -819,6 +845,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         context.runOnClient(client -> require(cloneTool().scroll(4), "Native Clone could not move the next copy"));
         BlockPos second = context.computeOnClient(client -> cloneOffset().immutable());
         require(!first.equals(second), "Repeat-copy preview did not move");
+        context.runOnClient(client -> require(cloneBridge().blueprints$hasPlaced(), "Moving the next copy reverted Finish to Cancel"));
+        if (previousTool == MoveBuilderTool.class) context.takeScreenshot("blueprint-repeat-finish-hints");
         world.getServer().runOnServer(server -> require(countFixtureBlocks(server.overworld()) == 3,
             "Moving the repeat-copy preview changed the world before confirmation"));
         context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
@@ -831,7 +859,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         });
         context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
         context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
-        assertRestoredTool(context, CloneBuilderTool.class);
+        assertRestoredTool(context, previousTool);
         context.runOnClient(client -> UserAction.UNDO.call(null));
         world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 3
             && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);

@@ -251,14 +251,10 @@ object Axiom613Adapter {
         val placement = importedPlacement ?: return
         val bridge = placement.clone as BlueprintCloneBridge
         bridge.`blueprints$inputTick`()
-        if (bridge.`blueprints$isImported`() &&
-            (placement.previousTool === placement.clone || !bridge.`blueprints$isConfirmed`() ||
-                Minecraft.getInstance().options.keyUse.isDown)
-        ) return
+        if (bridge.`blueprints$isImported`()) return
         importedPlacement = null
         val tools = BuilderToolManager.getTools()
         val stillSelected = tools.getOrNull(BuilderToolManager.getToolSlotSelected()) === placement.clone
-        if (bridge.`blueprints$isImported`()) placement.clone.reset(false)
         // A manual tool switch takes precedence over the saved selection.
         if (stillSelected) {
             val previousIndex = tools.indexOf(placement.previousTool)

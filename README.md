@@ -50,13 +50,14 @@ confirming. You can still move the preview downward with Axiom's controls.
 - Scroll to move the preview.
 - Middle-click to move it to the target.
 - Ctrl+R rotates; Ctrl+F flips.
-- Right-click confirms; left-click cancels.
+- Right-click places a copy. Move the preview, then right-click to place another.
+- Left-click cancels before the first copy, or finishes after placing copies.
 
-If Clone was already selected, the preview stays active after confirmation: move
-it and confirm again to place another copy, just like Axiom's normal Clone tool.
-Left-click finishes that preview. For any other original tool, releasing the
-confirming click closes the preview and restores that tool. Cancelling also
-restores the original tool.
+The preview stays active until you finish, regardless of your original tool,
+just like Axiom's normal Clone tool. Finishing or cancelling restores the tool
+you had selected before using the blueprint. On-screen hints show the controls;
+**Cancel** changes to **Finish** after the first copy. Finishing keeps the copies
+you already placed.
 
 Undo works through Axiom as usual; finish an active repeat-copy preview first.
 Manually switching tools during the preview cancels it without pasting and keeps
