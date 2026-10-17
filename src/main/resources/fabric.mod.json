@@ -6,6 +6,7 @@
   "description": "Your Axiom blueprint library as reusable creative inventory items.",
   "authors": ["markectomy"],
   "license": "All Rights Reserved",
+  "icon": "assets/axiom_blueprint_items/icon.png",
   "environment": "*",
   "mixins": [
     {"config": "axiom_blueprint_items.client.mixins.json", "environment": "client"},

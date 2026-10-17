@@ -1,5 +1,7 @@
 # Axiom Blueprint Items
 
+<img src="src/main/resources/assets/axiom_blueprint_items/icon.png" alt="Axiom Blueprint Items" width="128" height="128" align="right">
+
 A Kotlin/Fabric addon that puts saved Axiom blueprints in the creative inventory.
 Blueprint items are reusable links to files in your Axiom library.
 
