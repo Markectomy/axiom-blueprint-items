@@ -2,9 +2,13 @@ package dev.markectomy.blueprints.client.render
 
 import com.mojang.blaze3d.platform.NativeImage
 import dev.markectomy.blueprints.BlueprintItems
+import dev.markectomy.blueprints.client.config.PreviewSettings
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter
 import dev.markectomy.blueprints.data.LibraryPaths
+import dev.markectomy.blueprints.data.preview.PreviewDiskCache
 import dev.markectomy.blueprints.domain.BlueprintReference
+import dev.markectomy.blueprints.domain.preview.VoxelTurntable
+import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.special.SpecialModelRenderers
 import net.minecraft.client.renderer.texture.DynamicTexture
@@ -15,67 +19,62 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** Render-thread cache; its single worker owns decoding and never accesses live game state. */
+data class ThumbnailView(val texture: Identifier?, val frame: Int = 0, val columns: Int = 1, val revision: Long = 0)
+
+/** Client-thread cache; one bounded worker owns source IO, sampling and rasterization. */
 object BlueprintThumbnails : AutoCloseable {
     private const val LIMIT = 256
+    private const val ANIMATED_LIMIT = 64
     private const val SIZE = 64
+    private const val FRAME_NANOS = 250_000_000L
     private data class Key(val root: Path, val path: String)
-    private data class Entry(val texture: Identifier?, val slot: Int?)
+    private data class Image(val texture: Identifier, val slot: Int, val animated: Boolean, val revision: Long)
+    private data class Entry(val image: Image?, val stamp: String?, val generation: Long)
     private val cache = LinkedHashMap<Key, Entry>(LIMIT, 0.75f, true)
     private val pending = mutableSetOf<Key>()
-    private val slots = ArrayDeque<Int>((0 until LIMIT).toList())
+    private val staticSlots = ArrayDeque<Int>((0 until LIMIT).toList())
+    private val animatedSlots = ArrayDeque<Int>((0 until ANIMATED_LIMIT).toList())
     private val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(32)) { task ->
-        Thread(task, "blueprint-thumbnail-loader").apply { isDaemon = true }
+        Thread(task, "blueprint-preview-loader").apply { isDaemon = true }
     }
+    private val disk = PreviewDiskCache(FabricLoader.getInstance().gameDir.resolve(".cache/axiom-blueprint-items/previews"))
     private var registered = false
-    private var generation = 0L
-    private var closed = false
-    internal var revision: Long = 0
-        private set
+    private var enabled = true
+    @Volatile private var generation = 0L
+    @Volatile private var closed = false
+    private var revision = 0L
 
     fun initialize() {
         if (registered) return
+        enabled = PreviewSettings.load(FabricLoader.getInstance().configDir.resolve(PreviewSettings.FILE_NAME)).enabled
         SpecialModelRenderers.ID_MAPPER.put(BlueprintItems.id("thumbnail"), BlueprintThumbnailRenderer.Unbaked.CODEC)
         registered = true
     }
 
-    /** Nonblocking lookup. Missing, loading and corrupt previews return the generic item icon. */
-    fun texture(reference: BlueprintReference): Identifier? {
-        if (closed) return null
+    /** Nonblocking lookup; only the bounded angle joins vanilla's GUI model cache key. */
+    fun view(reference: BlueprintReference): ThumbnailView {
+        if (closed) return ThumbnailView(null)
         val key = Key(Axiom613Adapter.libraryRoot().toAbsolutePath().normalize(), reference.path)
-        cache[key]?.let { return it.texture }
-        if (key in pending || pending.size >= 33) return null
-        val request = generation
-        pending.add(key)
-        try {
-            worker.execute {
-                val pixels = runCatching {
-                    val path = LibraryPaths(key.root).resolve(reference)
-                    val png = Axiom613Adapter.readThumbnailPng(path) ?: return@runCatching null
-                    downsample(png)
-                }.getOrNull()
-                Minecraft.getInstance().execute completion@ {
-                    if (closed || request != generation) return@completion
-                    pending.remove(key)
-                    upload(key, pixels)
-                }
-            }
-        } catch (_: RejectedExecutionException) {
-            pending.remove(key)
-        }
-        return null
+        val entry = cache[key]
+        if ((entry == null || entry.generation != generation) && key !in pending && pending.size < 33) request(key, reference, entry)
+        val image = entry?.image ?: return ThumbnailView(null)
+        val frame = if (image.animated) Math.floorMod(System.nanoTime() / FRAME_NANOS, VoxelTurntable.FRAME_COUNT.toLong()).toInt() else 0
+        return ThumbnailView(image.texture, frame, if (image.animated) VoxelTurntable.COLUMNS else 1, image.revision)
+    }
+
+    fun texture(reference: BlueprintReference): Identifier? = view(reference).texture
+
+    /** Keep ready textures while checking whether their sources have changed. */
+    fun refresh() {
+        generation++
+        pending.clear()
+        worker.queue.clear()
     }
 
     fun invalidate() {
-        generation++
-        revision++
-        pending.clear()
-        worker.queue.clear()
-        val manager = Minecraft.getInstance().textureManager
-        cache.values.forEach { entry -> entry.texture?.let(manager::release) }
+        refresh()
+        cache.values.forEach { release(it.image) }
         cache.clear()
-        slots.clear()
-        slots.addAll(0 until LIMIT)
     }
 
     override fun close() {
@@ -85,40 +84,118 @@ object BlueprintThumbnails : AutoCloseable {
         worker.shutdownNow()
     }
 
-    private fun upload(key: Key, pixels: IntArray?) {
-        val manager = Minecraft.getInstance().textureManager
-        if (cache.size >= LIMIT) {
-            val iterator = cache.entries.iterator()
-            val old = iterator.next().value
-            iterator.remove()
-            old.texture?.let(manager::release)
-            old.slot?.let(slots::addLast)
-        }
-        val entry = if (pixels == null) {
-            Entry(null, null)
-        } else {
-            val slot = slots.removeFirst()
-            val id = BlueprintItems.id("thumbnail_cache/$slot")
-            val image = NativeImage(SIZE, SIZE, true)
-            try {
-                for (y in 0 until SIZE) for (x in 0 until SIZE) image.setPixel(x, y, pixels[y * SIZE + x])
-                val texture = DynamicTexture({ "Axiom blueprint thumbnail" }, image)
+    private fun request(key: Key, reference: BlueprintReference, previous: Entry?) {
+        val request = generation
+        pending.add(key)
+        try {
+            worker.execute {
                 try {
-                    manager.register(id, texture)
-                } catch (error: Exception) {
-                    texture.close()
-                    throw error
+                    val path = LibraryPaths(key.root).resolve(reference)
+                    val stamp = disk.keyFor(path)
+                    if (previous?.stamp == stamp) {
+                        complete(request, key) {
+                            // A refresh must not upload or invalidate unchanged item images.
+                            cache[key]?.let { cache[key] = it.copy(generation = request) }
+                        }
+                        return@execute
+                    }
+                    if (enabled) {
+                        val saved = disk.read(stamp)
+                        if (saved != null && disk.keyFor(path) == stamp) {
+                            complete(request, key) { upload(key, saved, true, stamp, request) }
+                            return@execute
+                        }
+                    }
+                    if (!active(request)) return@execute
+                    val fallback = runCatching { Axiom613Adapter.readThumbnailPng(path)?.let(::downsample) }.getOrNull()
+                    Minecraft.getInstance().execute {
+                        if (active(request)) upload(key, fallback, false, stamp, request)
+                    }
+                    val atlas = if (enabled && active(request)) runCatching {
+                        VoxelTurntable.render(Axiom613Adapter.preparePreview(path)).copyPixels()
+                    }.getOrNull() else null
+                    if (!active(request)) return@execute
+                    if (disk.keyFor(path) != stamp) {
+                        complete(request, key) { remove(key) }
+                        return@execute
+                    }
+                    if (atlas != null) disk.write(stamp, atlas)
+                    complete(request, key) {
+                        if (atlas != null) upload(key, atlas, true, stamp, request)
+                    }
+                } catch (_: Exception) {
+                    complete(request, key) { upload(key, null, false, null, request) }
                 }
-                Entry(id, slot)
-            } catch (_: Exception) {
-                if (!image.isClosed) image.close()
-                slots.addLast(slot)
-                Entry(null, null)
             }
+        } catch (_: RejectedExecutionException) {
+            pending.remove(key)
         }
-        cache[key] = entry
-        // Invalidate vanilla's cached fallback image when the thumbnail becomes ready.
-        revision++
+    }
+
+    private fun active(request: Long): Boolean = !closed && generation == request && !Thread.currentThread().isInterrupted
+
+    private fun complete(request: Long, key: Key, action: () -> Unit) {
+        Minecraft.getInstance().execute {
+            if (!active(request)) return@execute
+            pending.remove(key)
+            action()
+        }
+    }
+
+    private fun release(image: Image?) {
+        if (image == null) return
+        Minecraft.getInstance().textureManager.release(image.texture)
+        (if (image.animated) animatedSlots else staticSlots).addLast(image.slot)
+    }
+
+    private fun remove(key: Key) {
+        release(cache.remove(key)?.image)
+    }
+
+    private fun upload(key: Key, pixels: IntArray?, animated: Boolean, stamp: String?, request: Long) {
+        if (pixels == null) {
+            remove(key)
+            if (cache.size >= LIMIT) remove(cache.entries.first().key)
+            cache[key] = Entry(null, stamp, request)
+            return
+        }
+        val image = createImage(key, pixels, animated)
+        if (image == null) {
+            // Keep a usable saved thumbnail and retry a failed upload after an explicit refresh.
+            val previous = cache[key]
+            if (previous == null && cache.size >= LIMIT) remove(cache.entries.first().key)
+            cache[key] = Entry(previous?.image, null, request)
+            return
+        }
+        remove(key)
+        if (cache.size >= LIMIT) remove(cache.entries.first().key)
+        cache[key] = Entry(image, stamp, request)
+    }
+
+    private fun createImage(key: Key, pixels: IntArray, animated: Boolean): Image? {
+        val slots = if (animated) animatedSlots else staticSlots
+        val size = if (animated) VoxelTurntable.ATLAS_SIZE else SIZE
+        var native: NativeImage? = null
+        var texture: DynamicTexture? = null
+        var slot: Int? = null
+        return try {
+            native = NativeImage(size, size, true)
+            for (y in 0 until size) for (x in 0 until size) native.setPixel(x, y, pixels[y * size + x])
+            texture = DynamicTexture({ "Axiom blueprint preview" }, native)
+            if (slots.isEmpty()) {
+                val victim = cache.entries.first { it.key != key && it.value.image?.animated == animated }.key
+                remove(victim)
+            }
+            slot = slots.removeFirst()
+            val id = BlueprintItems.id("thumbnail_cache/${if (animated) "animated" else "static"}/$slot")
+            Minecraft.getInstance().textureManager.register(id, texture)
+            Image(id, slot, animated, ++revision)
+        } catch (_: Exception) {
+            texture?.close()
+            if (native?.isClosed == false) native.close()
+            slot?.let(slots::addLast)
+            null
+        }
     }
 
     private fun downsample(png: ByteArray): IntArray = NativeImage.read(png).use { source ->

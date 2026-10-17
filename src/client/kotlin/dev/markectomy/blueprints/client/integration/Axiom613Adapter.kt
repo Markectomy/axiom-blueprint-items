@@ -12,10 +12,14 @@ import com.moulberry.axiom.buildertools.CloneBuilderTool
 import com.moulberry.axiom.render.regions.ChunkedBlockRegion
 import com.moulberry.axiom.restrictions.AxiomPermission
 import com.moulberry.axiom.world_modification.BlockBuffer
+import dev.markectomy.blueprints.domain.preview.VoxelPreview
 import net.minecraft.core.BlockPos
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.nbt.NbtAccounter
 import net.minecraft.nbt.NbtIo
+import net.minecraft.world.level.EmptyBlockGetter
+import net.minecraft.world.level.block.state.BlockState
+import net.minecraft.world.level.material.MapColor
 import java.io.BufferedInputStream
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
@@ -41,6 +45,12 @@ object Axiom613Adapter {
     private const val MAX_FILE = 128 * 1024 * 1024
     private const val MAX_DECOMPRESSED = 128L * 1024 * 1024
     private const val MAX_CHUNKS = 4096
+    private const val MAX_PREVIEW_FILE = 32 * 1024 * 1024
+    private const val MAX_PREVIEW_DECOMPRESSED = 32L * 1024 * 1024
+    private const val MAX_PREVIEW_CHUNKS = 512
+    private const val PREVIEW_AXIS = 24
+    private const val MAP_COLORS = 64
+    private val rawDecodeLock = Any()
     private val pngSignature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
 
     fun libraryRoot(): Path = Axiom.getInstance().blueprintDirectory
@@ -73,12 +83,7 @@ object Axiom613Adapter {
 
     /** Worker-only: prepare private CPU data; no world mutation, texture decode or GPU upload. */
     fun prepare(path: Path): PreparedBlueprint {
-        if (Files.size(path) !in 1..MAX_FILE.toLong()) throw IOException("Blueprint file exceeds 128 MiB")
-        val bytes = Files.newInputStream(path).use { input -> input.readNBytes(MAX_FILE + 1) }
-        if (bytes.size > MAX_FILE) throw IOException("Blueprint file exceeds 128 MiB")
-        validateBuildEnvelope(bytes)
-        val raw = BlueprintIo.readRawBlueprint(ByteArrayInputStream(bytes))
-        if (raw.blocks().size > MAX_CHUNKS) throw IOException("Blueprint exceeds 4096 chunks")
+        val raw = readRaw(path, MAX_FILE, MAX_DECOMPRESSED, MAX_CHUNKS)
         val region = ChunkedBlockRegion()
         for (entry in raw.blocks().long2ObjectEntrySet()) {
             if (Thread.currentThread().isInterrupted) throw IOException("Blueprint preparation cancelled")
@@ -95,6 +100,89 @@ object Axiom613Adapter {
         region.dirtyAll()
         if (region.isEmpty && raw.entities().isEmpty()) throw IOException("Blueprint has no blocks or entities")
         return PreparedBlueprint(raw, region)
+    }
+
+    /** Worker-only: bounded color samples, independent of world state and rendering resources. */
+    fun preparePreview(path: Path): VoxelPreview {
+        val raw = readRaw(path, MAX_PREVIEW_FILE, MAX_PREVIEW_DECOMPRESSED, MAX_PREVIEW_CHUNKS)
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var minZ = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+        var maxZ = Int.MIN_VALUE
+        forEachPreviewBlock(raw) { x, y, z, _ ->
+            minX = minOf(minX, x)
+            minY = minOf(minY, y)
+            minZ = minOf(minZ, z)
+            maxX = maxOf(maxX, x)
+            maxY = maxOf(maxY, y)
+            maxZ = maxOf(maxZ, z)
+        }
+        if (minX == Int.MAX_VALUE) throw IOException("Blueprint has no visible blocks")
+        fun extent(minimum: Int, maximum: Int): Int {
+            val value = maximum.toLong() - minimum + 1L
+            if (value !in 1..VoxelPreview.MAX_EXTENT.toLong()) throw IOException("Blueprint preview extent exceeds its limit")
+            return value.toInt()
+        }
+        val extentX = extent(minX, maxX)
+        val extentY = extent(minY, maxY)
+        val extentZ = extent(minZ, maxZ)
+        val longest = maxOf(PREVIEW_AXIS, extentX, extentY, extentZ)
+        fun sampleSize(extent: Int): Int = ((extent.toLong() * PREVIEW_AXIS + longest - 1L) / longest).toInt()
+        val sizeX = sampleSize(extentX)
+        val sizeY = sampleSize(extentY)
+        val sizeZ = sampleSize(extentZ)
+        val voxelCount = sizeX * sizeY * sizeZ
+        val counts = IntArray(voxelCount * MAP_COLORS)
+        forEachPreviewBlock(raw) { x, y, z, state ->
+            val sampleX = ((x.toLong() - minX) * sizeX / extentX).toInt()
+            val sampleY = ((y.toLong() - minY) * sizeY / extentY).toInt()
+            val sampleZ = ((z.toLong() - minZ) * sizeZ / extentZ).toInt()
+            // Minecraft 26.2 caches map colors on each immutable block state.
+            val color = state.getMapColor(EmptyBlockGetter.INSTANCE, BlockPos.ZERO)
+            val colorId = if (color.id in 0 until MAP_COLORS) color.id else 0
+            val index = (sampleY * sizeZ + sampleZ) * sizeX + sampleX
+            counts[index * MAP_COLORS + colorId]++
+        }
+        val colors = IntArray(voxelCount)
+        for (voxel in 0 until voxelCount) {
+            var selected = 0
+            var maximum = 0
+            for (colorId in 0 until MAP_COLORS) {
+                val count = counts[voxel * MAP_COLORS + colorId]
+                if (count > maximum) {
+                    maximum = count
+                    selected = colorId
+                }
+            }
+            if (maximum != 0) {
+                val color = if (selected == MapColor.NONE.id) 0x909090 else MapColor.byId(selected).col
+                colors[voxel] = color or (0xFF shl 24)
+            }
+        }
+        return VoxelPreview(sizeX, sizeY, sizeZ, colors, extentX, extentY, extentZ)
+    }
+
+    private inline fun forEachPreviewBlock(raw: RawBlueprint, action: (Int, Int, Int, BlockState) -> Unit) {
+        for (entry in raw.blocks().long2ObjectEntrySet()) {
+            if (Thread.currentThread().isInterrupted) throw IOException("Blueprint preview preparation cancelled")
+            val key = entry.longKey
+            val chunk = entry.value ?: throw IOException("Blueprint contains a missing section")
+            val baseX = BlockPos.getX(key).toLong() * 16L
+            val baseY = BlockPos.getY(key).toLong() * 16L
+            val baseZ = BlockPos.getZ(key).toLong() * 16L
+            if (baseX < Int.MIN_VALUE || baseX + 15L > Int.MAX_VALUE ||
+                baseY < Int.MIN_VALUE || baseY + 15L > Int.MAX_VALUE ||
+                baseZ < Int.MIN_VALUE || baseZ + 15L > Int.MAX_VALUE
+            ) throw IOException("Blueprint section coordinates exceed their limit")
+            for (z in 0..15) for (y in 0..15) for (x in 0..15) {
+                val state = chunk.get(x, y, z)
+                if (state !== BlockBuffer.EMPTY_STATE && !state.isAir) {
+                    action((baseX + x).toInt(), (baseY + y).toInt(), (baseZ + z).toInt(), state)
+                }
+            }
+        }
     }
 
     fun isPlacing(): Boolean = Placement.INSTANCE.isPlacing ||
@@ -157,16 +245,30 @@ object Axiom613Adapter {
         }
     }
 
-    private fun validateBuildEnvelope(bytes: ByteArray) {
+    private fun readRaw(path: Path, maximumFile: Int, maximumDecompressed: Long, maximumChunks: Int): RawBlueprint {
+        if (Files.size(path) !in 1..maximumFile.toLong()) throw IOException("Blueprint file exceeds ${maximumFile / (1024 * 1024)} MiB")
+        val bytes = Files.newInputStream(path).use { input -> input.readNBytes(maximumFile + 1) }
+        if (bytes.size > maximumFile) throw IOException("Blueprint file exceeds ${maximumFile / (1024 * 1024)} MiB")
+        validateBuildEnvelope(bytes, maximumFile, maximumDecompressed, maximumChunks)
+        val raw = synchronized(rawDecodeLock) {
+            if (Thread.currentThread().isInterrupted) throw IOException("Blueprint preparation cancelled")
+            BlueprintIo.readRawBlueprint(ByteArrayInputStream(bytes))
+        } ?: throw IOException("Blueprint could not be read")
+        val blocks = raw.blocks() ?: throw IOException("Blueprint has no block data")
+        if (blocks.size > maximumChunks) throw IOException("Blueprint exceeds $maximumChunks chunks")
+        return raw
+    }
+
+    private fun validateBuildEnvelope(bytes: ByteArray, maximumFile: Int, maximumDecompressed: Long, maximumChunks: Int) {
         DataInputStream(ByteArrayInputStream(bytes)).use { input ->
             readValidatedHeader(input)
             val thumbnailSize = boundedLength(input.readInt(), MAX_THUMBNAIL, "thumbnail")
             input.skipNBytes(thumbnailSize.toLong())
-            boundedLength(input.readInt(), MAX_FILE, "build")
+            boundedLength(input.readInt(), maximumFile, "build")
             // Enforce a quota before Axiom rereads these bytes with unlimitedHeap().
-            val build = NbtIo.readCompressed(input, NbtAccounter.create(MAX_DECOMPRESSED))
-            if (build.getListOrEmpty("BlockRegion").size > MAX_CHUNKS) {
-                throw IOException("Blueprint exceeds 4096 chunks")
+            val build = NbtIo.readCompressed(input, NbtAccounter.create(maximumDecompressed))
+            if (build.getListOrEmpty("BlockRegion").size > maximumChunks) {
+                throw IOException("Blueprint exceeds $maximumChunks chunks")
             }
         }
     }

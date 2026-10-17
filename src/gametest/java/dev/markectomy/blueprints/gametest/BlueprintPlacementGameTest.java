@@ -90,6 +90,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             try {
                 context.runOnClient(client -> writeFixture(fixture));
                 BlueprintReference reference = new BlueprintReference(1, fixture.getFileName().toString(), "Placement proof");
+                checkpoint("rotating preview cache and fallback");
+                BlueprintPreviewChecks.run(context, fixture, reference);
                 checkpoint("inventory persistence");
                 verifyInventoryAndPersistence(world, reference);
                 checkpoint("creative tab placement and collision");
@@ -183,6 +185,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                     BuilderToolManager.setToolSlotActive(false);
                     Placement.INSTANCE.stopPlacement();
                     EditorUI.disable();
+                    BlueprintThumbnails.INSTANCE.invalidate();
                 });
                 Files.deleteIfExists(fixture);
             }

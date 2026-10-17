@@ -52,9 +52,32 @@ Editing the source changes future placements. Moving or deleting the file breaks
 the link; the item remains in your inventory and reports the problem. Copy the
 matching library files when moving a world to another computer.
 
-Thumbnails are static, pixelated images up to 64 pixels across. Missing or invalid
-images use a paper icon. Saved entities follow Axiom's **Copy Entities** setting
-and are included in undo. Entity-only blueprints are currently unsupported.
+Saved entities follow Axiom's **Copy Entities** setting and are included in undo.
+Entity-only blueprints are currently unsupported.
+
+## Item previews
+
+Blueprint icons rotate through 16 views over four seconds in the inventory,
+hotbar, hand, and dropped items. These are simplified, shaded voxel miniatures
+using Minecraft map colors, rather than full block textures or exact block models.
+Colors therefore do not change with resource packs. Large builds are reduced to
+at most 24 samples along their longest axis; each view is 64 × 64 pixels.
+
+Previews are generated only for items being displayed, on one background worker.
+The saved Axiom thumbnail appears while generation is pending. Over-budget or
+unreadable builds keep that thumbnail; missing or invalid images use a paper icon.
+Preview generation has separate limits of 32 MiB per source file, 32 MiB of
+accounted build NBT, and 512 source sections. These limits do not affect placement.
+
+Up to 64 rotating previews are held in memory, using about 16 MiB of GPU textures
+and 16 MiB of image pixels, plus temporary generation data and vanilla item caches.
+The disk cache is limited to 32 MiB and 512 files under
+`.cache/axiom-blueprint-items/previews` in the game directory. Source edits refresh
+previews when the library is refreshed. Unchanged sources reuse their cached views.
+
+To use the original static thumbnails, set `animatedPreviews` to `false` in
+`config/axiom-blueprint-items.json` and restart Minecraft. The file is created on
+first launch. Deleting the preview cache is safe; displayed previews regenerate.
 
 Blueprint loading is limited to 128 MiB files and 4096 source chunks. Exceptionally
 large or corrupt files are rejected. The integration targets Axiom 6.1.3 exactly.

@@ -13,13 +13,13 @@ import org.joml.Vector3f
 import org.joml.Vector3fc
 import java.util.function.Consumer
 
-data class ThumbnailArgument(val reference: BlueprintReference?, val texture: Identifier?, val revision: Long)
+data class ThumbnailArgument(val reference: BlueprintReference?, val image: ThumbnailView)
 
 /** A flat, double-sided image using vanilla's generated-item display transforms. */
 class BlueprintThumbnailRenderer : SpecialModelRenderer<ThumbnailArgument> {
     override fun extractArgument(stack: ItemStack): ThumbnailArgument {
         val reference = BlueprintItems.reference(stack)
-        return ThumbnailArgument(reference, reference?.let(BlueprintThumbnails::texture), BlueprintThumbnails.revision)
+        return ThumbnailArgument(reference, reference?.let(BlueprintThumbnails::view) ?: ThumbnailView(null))
     }
 
     override fun submit(
@@ -31,20 +31,27 @@ class BlueprintThumbnailRenderer : SpecialModelRenderer<ThumbnailArgument> {
         hasFoil: Boolean,
         outlineColor: Int,
     ) {
-        val texture = argument?.texture ?: FALLBACK
+        val image = argument?.image
+        val texture = image?.texture ?: FALLBACK
+        val columns = image?.columns ?: 1
+        val frame = image?.frame ?: 0
+        val u0 = (frame % columns).toFloat() / columns
+        val v0 = (frame / columns).toFloat() / columns
+        val u1 = u0 + 1f / columns
+        val v1 = v0 + 1f / columns
         submitNodeCollector.submitCustomGeometry(poseStack, RenderTypes.itemCutout(texture)) { pose, buffer ->
             fun vertex(x: Float, y: Float, u: Float, v: Float, z: Float, normal: Float) {
                 buffer.addVertex(pose, x, y, z).setColor(-1).setUv(u, v)
                     .setOverlay(overlayCoords).setLight(lightCoords).setNormal(pose, 0f, 0f, normal)
             }
-            vertex(0f, 0f, 0f, 1f, 0.501f, 1f)
-            vertex(1f, 0f, 1f, 1f, 0.501f, 1f)
-            vertex(1f, 1f, 1f, 0f, 0.501f, 1f)
-            vertex(0f, 1f, 0f, 0f, 0.501f, 1f)
-            vertex(1f, 0f, 0f, 1f, 0.499f, -1f)
-            vertex(0f, 0f, 1f, 1f, 0.499f, -1f)
-            vertex(0f, 1f, 1f, 0f, 0.499f, -1f)
-            vertex(1f, 1f, 0f, 0f, 0.499f, -1f)
+            vertex(0f, 0f, u0, v1, 0.501f, 1f)
+            vertex(1f, 0f, u1, v1, 0.501f, 1f)
+            vertex(1f, 1f, u1, v0, 0.501f, 1f)
+            vertex(0f, 1f, u0, v0, 0.501f, 1f)
+            vertex(1f, 0f, u0, v1, 0.499f, -1f)
+            vertex(0f, 0f, u1, v1, 0.499f, -1f)
+            vertex(0f, 1f, u1, v0, 0.499f, -1f)
+            vertex(1f, 1f, u0, v0, 0.499f, -1f)
         }
     }
 

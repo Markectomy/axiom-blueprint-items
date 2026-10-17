@@ -32,7 +32,7 @@ object BlueprintItemsClient : ClientModInitializer {
                 }
             },
         )
-        BlueprintLibrary.onRefresh = BlueprintThumbnails::invalidate
+        BlueprintLibrary.onRefresh = BlueprintThumbnails::refresh
         BlueprintCreativeUi.initialize()
         ClientTickEvents.END_CLIENT_TICK.register { Axiom613Adapter.inputTick() }
         ClientPlayConnectionEvents.DISCONNECT.register { _, _ ->
