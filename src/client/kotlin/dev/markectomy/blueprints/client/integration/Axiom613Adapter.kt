@@ -8,11 +8,13 @@ import com.moulberry.axiom.blueprint.RawBlueprint
 import com.moulberry.axiom.clipboard.Placement
 import com.moulberry.axiom.editor.EditorUI
 import com.moulberry.axiom.buildertools.BuilderToolManager
+import com.moulberry.axiom.buildertools.BuilderTool
 import com.moulberry.axiom.buildertools.CloneBuilderTool
 import com.moulberry.axiom.render.regions.ChunkedBlockRegion
 import com.moulberry.axiom.restrictions.AxiomPermission
 import com.moulberry.axiom.world_modification.BlockBuffer
 import dev.markectomy.blueprints.domain.preview.VoxelPreview
+import net.minecraft.client.Minecraft
 import net.minecraft.core.BlockPos
 import net.minecraft.nbt.CompoundTag
 import net.minecraft.nbt.NbtAccounter
@@ -38,7 +40,9 @@ class PreparedBlueprint internal constructor(
 
 /** Axiom 6.1.3 library loading and native Clone handoff. */
 object Axiom613Adapter {
-    private var importedClone: CloneBuilderTool? = null
+    private data class ImportedPlacement(val clone: CloneBuilderTool, val previousTool: BuilderTool)
+
+    private var importedPlacement: ImportedPlacement? = null
     private const val MAGIC = 182827830
     private const val MAX_HEADER = 1024 * 1024
     private const val MAX_THUMBNAIL = 4 * 1024 * 1024
@@ -205,9 +209,11 @@ object Axiom613Adapter {
 
     /** Client/render-thread-only. Caller must revalidate player/session and creative singleplayer. */
     fun start(prepared: PreparedBlueprint, position: BlockPos): Boolean {
+        inputTick()
         if (!isAvailable() || isPlacing() || prepared.region.isEmpty) return false
         val minimum = prepared.region.min() ?: return false
         val tools = BuilderToolManager.getTools()
+        val previousTool = tools.getOrNull(BuilderToolManager.getToolSlotSelected()) ?: return false
         val index = tools.indexOfFirst { it is CloneBuilderTool }
         if (index < 0) return false
         // A native tool switch can apply its selection; check conflicts before switching.
@@ -218,18 +224,32 @@ object Axiom613Adapter {
         // Saved coordinates are relative to the blueprint origin, which may be above its base.
         val offset = position.offset(0, -minimum.y, 0)
         (clone as BlueprintCloneBridge).`blueprints$start`(prepared.raw, prepared.region, offset)
-        importedClone = clone
+        importedPlacement = ImportedPlacement(clone, previousTool)
         return true
     }
 
     fun inputTick() {
-        (importedClone as? BlueprintCloneBridge)?.`blueprints$inputTick`()
+        val placement = importedPlacement ?: return
+        val bridge = placement.clone as BlueprintCloneBridge
+        bridge.`blueprints$inputTick`()
+        if (bridge.`blueprints$isImported`() &&
+            (!bridge.`blueprints$isConfirmed`() || Minecraft.getInstance().options.keyUse.isDown)
+        ) return
+        importedPlacement = null
+        val tools = BuilderToolManager.getTools()
+        val stillSelected = tools.getOrNull(BuilderToolManager.getToolSlotSelected()) === placement.clone
+        if (bridge.`blueprints$isImported`()) placement.clone.reset(false)
+        // A manual tool switch takes precedence over the saved selection.
+        if (stillSelected) {
+            val previousIndex = tools.indexOf(placement.previousTool)
+            if (previousIndex >= 0) BuilderToolManager.setToolSlotSelected(previousIndex)
+        }
     }
 
     fun clearImportedPreview() {
-        val clone = importedClone ?: return
-        if ((clone as BlueprintCloneBridge).`blueprints$isImported`()) clone.reset(false)
-        importedClone = null
+        val placement = importedPlacement ?: return
+        importedPlacement = null
+        if ((placement.clone as BlueprintCloneBridge).`blueprints$isImported`()) placement.clone.reset(false)
     }
 
     private fun readHeaderFrame(input: DataInputStream): ByteArray {

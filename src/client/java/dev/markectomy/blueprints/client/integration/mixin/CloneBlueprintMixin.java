@@ -83,6 +83,11 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
         return blueprints$entities != null;
     }
 
+    @Override
+    public boolean blueprints$isConfirmed() {
+        return blueprints$entities != null && reclone;
+    }
+
     @Inject(method = "rightClick", at = @At("HEAD"), cancellable = true)
     private void blueprints$separateInitialUse(HitResult hit, CallbackInfo callback) {
         if (blueprints$entities != null && blueprints$waitForRelease) callback.cancel();

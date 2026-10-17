@@ -18,7 +18,10 @@ import com.moulberry.axiom.editor.tutorial.TutorialManager;
 import com.moulberry.axiom.render.regions.ChunkedBlockRegion;
 import com.moulberry.axiom.restrictions.AxiomPermission;
 import com.moulberry.axiom.buildertools.BuilderToolManager;
+import com.moulberry.axiom.buildertools.BuilderTool;
 import com.moulberry.axiom.buildertools.CloneBuilderTool;
+import com.moulberry.axiom.buildertools.MoveBuilderTool;
+import com.moulberry.axiom.buildertools.StackBuilderTool;
 import org.lwjgl.glfw.GLFW;
 import net.minecraft.client.Minecraft;
 import com.moulberry.axiom.world_modification.CompressedBlockEntity;
@@ -111,6 +114,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 checkpoint("airborne targeting beyond interaction reach");
                 verifyAirborneTargeting(context, world, reference);
                 context.runOnClient(client -> {
+                    selectBuilderTool(MoveBuilderTool.class);
                     ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
                     client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
                     stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
@@ -141,14 +145,15 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
                 context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
                 assertWorldEmpty(world);
-                context.runOnClient(BlueprintPlacementGameTest::assertBuilderMode);
+                assertRestoredTool(context, MoveBuilderTool.class);
                 context.runOnClient(client -> {
                     require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
                         "Could not start tool-switch cancellation proof");
-                    // Axiom passes true during tool switches; imported previews must never auto-confirm.
-                    cloneTool().reset(true);
+                    selectBuilderTool(StackBuilderTool.class);
                     require(!Axiom613Adapter.INSTANCE.isPlacing(), "Tool switch left an imported preview pending");
                 });
+                context.waitTicks(2);
+                assertRestoredTool(context, StackBuilderTool.class);
                 assertWorldEmpty(world);
                 context.runOnClient(client -> BuilderToolManager.setToolSlotActive(false));
                 context.waitTicks(2);
@@ -171,10 +176,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                     && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);
                 world.getServer().runOnServer(server -> require(countTaggedEntities(server.overworld(), "blueprint_ambient") == 1,
                     "Imported Clone copied an unrelated entity from source-world bounds"));
-                context.runOnClient(BlueprintPlacementGameTest::assertBuilderMode);
-                // Native Clone intentionally remains ready for repeated copies after confirmation.
-                checkpoint("native Clone cancel");
-                context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+                checkpoint("previous tool restored after confirmation");
+                assertRestoredTool(context, StackBuilderTool.class);
                 context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
                 context.waitFor(client -> Dispatcher.getHistoryDataCount() > 0);
                 checkpoint("native Clone undo blocks and saved entity");
@@ -184,6 +187,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 world.getServer().runOnServer(server -> require(countTaggedEntities(server.overworld(), "blueprint_ambient") == 1,
                     "Undo modified an unrelated ambient entity"));
                 assertWorldEmpty(world);
+                checkpoint("same-tool restoration, slot exit, and disconnect cleanup");
+                verifyPlacementCleanup(context, world, fixture);
                 checkpoint("all regressions passed");
             } finally {
                 context.runOnClient(client -> {
@@ -704,6 +709,80 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         require(!Placement.INSTANCE.isPlacing(), "Blueprint placement used the editor clipboard");
         require(BuilderToolManager.isToolSlotActive() && BuilderToolManager.selectedToolIs(CloneBuilderTool.class),
             "Blueprint placement did not select Axiom's native tenth-slot Clone tool");
+    }
+
+    private static void selectBuilderTool(Class<? extends BuilderTool> type) {
+        var tools = BuilderToolManager.getTools();
+        int index = -1;
+        for (int candidate = 0; candidate < tools.size(); candidate++) {
+            if (type.isInstance(tools.get(candidate))) index = candidate;
+        }
+        require(index >= 0, "Missing native builder tool " + type.getSimpleName());
+        BuilderToolManager.setToolSlotSelected(index);
+    }
+
+    private static void assertRestoredTool(ClientGameTestContext context, Class<? extends BuilderTool> type) {
+        context.waitFor(client -> BuilderToolManager.selectedToolIs(type));
+        context.runOnClient(client -> {
+            require(client.player.isCreative() && !EditorUI.isEnabled() && !Placement.INSTANCE.isPlacing(),
+                "Restoring the previous builder tool changed game mode or opened the editor");
+            require(cloneRegion() == null && cloneOffset() == null, "Finished blueprint retained native Clone preview data");
+        });
+    }
+
+    private static void verifyPlacementCleanup(ClientGameTestContext context, TestSingleplayerContext world, Path fixture) {
+        context.runOnClient(client -> {
+            selectBuilderTool(CloneBuilderTool.class);
+            require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
+                "Could not start same-tool restoration proof");
+        });
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
+        assertRestoredTool(context, CloneBuilderTool.class);
+        context.runOnClient(client -> {
+            selectBuilderTool(MoveBuilderTool.class);
+            require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
+                "Could not start slot-exit proof");
+            BuilderToolManager.setToolSlotActive(false);
+        });
+        assertRestoredTool(context, MoveBuilderTool.class);
+        context.runOnClient(client -> {
+            require(!BuilderToolManager.isToolSlotActive(), "Restoring a tool reactivated the exited tenth slot");
+            require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
+                "Could not start disconnect cleanup proof");
+            Axiom613Adapter.INSTANCE.clearImportedPreview();
+            selectBuilderTool(StackBuilderTool.class);
+        });
+        context.waitTicks(2);
+        assertRestoredTool(context, StackBuilderTool.class);
+        assertWorldEmpty(world);
+        context.runOnClient(client -> {
+            selectBuilderTool(MoveBuilderTool.class);
+            require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
+                "Could not start Move restoration after confirmation");
+        });
+        context.waitTicks(2);
+        context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        try {
+            world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 3
+                && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);
+            context.waitTicks(10);
+            context.runOnClient(client -> {
+                require(BuilderToolManager.selectedToolIs(CloneBuilderTool.class),
+                    "Confirm click reached the previous tool before its release");
+            });
+            world.getServer().runOnServer(server -> require(countTaggedEntities(server.overworld(), "blueprint_saved") == 1,
+                "Holding confirm pasted a second blueprint"));
+        } finally {
+            context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        }
+        assertRestoredTool(context, MoveBuilderTool.class);
+        context.runOnClient(client -> require(!Axiom613Adapter.INSTANCE.isPlacing(),
+            "Confirmation left a selection active in the restored Move tool"));
+        context.runOnClient(client -> UserAction.UNDO.call(null));
+        world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 0
+            && countTaggedEntities(server.overworld(), "blueprint_saved") == 0);
+        assertWorldEmpty(world);
     }
 
     /** Axiom handles rotate/flip from keybinds during world rendering, not EditorUI actions. */

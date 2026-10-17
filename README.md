@@ -42,10 +42,11 @@ confirming. You can still move the preview downward with Axiom's controls.
 - Ctrl+R rotates; Ctrl+F flips.
 - Right-click confirms; left-click cancels.
 
-These are Axiom's default controls. A confirmed placement leaves its repeat-copy
-preview active. Cancel that preview before using builder undo. Existing builder
-selections and editor placements must be finished or cancelled before starting
-another blueprint. Switching tools cancels an imported preview without pasting.
+Once you release the confirming click, the preview closes and the tenth slot
+returns to your previously selected Axiom tool. Cancelling also restores that tool.
+Undo works through Axiom as usual. Manually switching tools during the preview
+cancels it without pasting and keeps the tool you chose. Existing builder selections
+and editor placements must be finished or cancelled before starting another blueprint.
 
 ## Library links
 
