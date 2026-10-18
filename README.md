@@ -39,6 +39,12 @@ Minecraft GUI textures, so resource packs can change its appearance.
 
 ## Placement
 
+Hold **Sneak (Shift by default)** and right-click to place one copy immediately
+at the surface you aim at, without opening the movable preview. Your selected
+hotbar slot and Axiom tool stay unchanged. Release right-click before placing
+another copy; holding it does not keep pasting. Axiom's normal undo works for
+these placements too.
+
 Take a blueprint item into your inventory and right-click the air. This starts
 Axiom's Clone preview in its tenth hotbar slot and keeps you in creative mode.
 The preview starts with its lowest blocks above the surface you aim at, including

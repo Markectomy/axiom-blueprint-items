@@ -238,6 +238,23 @@ object Axiom613Adapter {
         return true
     }
 
+    /** Client-thread-only: one native paste and undo entry, without activating the tool slot. */
+    fun placeImmediately(prepared: PreparedBlueprint, position: BlockPos): Boolean {
+        inputTick()
+        val player = Minecraft.getInstance().player ?: return false
+        if (importedPlacement != null || !player.isCreative || !isAvailable() || isPlacing() || prepared.region.isEmpty) return false
+        val minimum = prepared.region.min() ?: return false
+        val clone = BuilderToolManager.getTools().filterIsInstance<CloneBuilderTool>().firstOrNull() ?: return false
+        val bridge = clone as BlueprintCloneBridge
+        try {
+            bridge.`blueprints$start`(prepared.raw, prepared.region, position.offset(0, -minimum.y, 0))
+            bridge.`blueprints$apply`()
+            return bridge.`blueprints$hasPlaced`()
+        } finally {
+            clone.reset(false)
+        }
+    }
+
     fun validateImportedPreview() {
         val placement = importedPlacement ?: return
         val client = Minecraft.getInstance()

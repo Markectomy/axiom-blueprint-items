@@ -40,6 +40,7 @@ import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.gen.Invoker;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
@@ -60,6 +61,10 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
     @Unique private List<CompoundTag> blueprints$entities;
     @Unique private boolean blueprints$waitForRelease;
     @Unique private boolean blueprints$hasPlaced;
+
+    @Override
+    @Invoker("apply")
+    public abstract void blueprints$apply();
 
     @Override
     public void blueprints$start(RawBlueprint raw, ChunkedBlockRegion region, BlockPos position) {

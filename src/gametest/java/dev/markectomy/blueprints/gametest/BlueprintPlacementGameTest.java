@@ -213,6 +213,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 verifyRepeatPlacement(context, world, reference, MoveBuilderTool.class, 0);
                 verifyRepeatPlacement(context, world, reference, StackBuilderTool.class, 4);
                 verifyRepeatPlacement(context, world, reference, CloneBuilderTool.class, 8);
+                checkpoint("instant placement, click snapshot, held-use suppression, offhand, and undo");
+                verifyInstantPlacement(context, world, reference);
                 checkpoint("all regressions passed");
             } finally {
                 context.runOnClient(client -> {
@@ -915,6 +917,113 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 0
             && countTaggedEntities(server.overworld(), "blueprint_saved") == 0);
         assertWorldEmpty(world);
+    }
+
+    private static void verifyInstantPlacement(ClientGameTestContext context, TestSingleplayerContext world,
+                                                BlueprintReference reference) {
+        BlockPos support = new BlockPos(0, 98, 3);
+        BlockPos target = support.above();
+        world.getServer().runCommand("setblock 0 98 3 bedrock");
+        world.getServer().runCommand("tp @a 0.0 180.0 0.0 0 0");
+        context.waitFor(client -> Math.abs(client.player.getY() - 180) < 0.01
+            && client.level.getBlockState(support).is(Blocks.BEDROCK));
+        boolean copyEntities = context.computeOnClient(client -> BuilderToolManager.copyEntities);
+        try {
+            context.runOnClient(client -> {
+                selectBuilderTool(StackBuilderTool.class);
+                BuilderToolManager.setToolSlotActive(false);
+                BuilderToolManager.copyEntities = true;
+                client.player.getInventory().setSelectedSlot(6);
+                client.player.setItemInHand(InteractionHand.MAIN_HAND, BlueprintItems.INSTANCE.createStack(reference));
+                client.player.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+                client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                    new net.minecraft.world.phys.Vec3(0.5, 98.95, 3.5));
+            });
+            context.waitTicks(2);
+            // Hold only the decoder lock on the test thread to make the async handoff deterministic.
+            Object decoderLock = context.computeOnClient(client -> {
+                try {
+                    var field = Axiom613Adapter.class.getDeclaredField("rawDecodeLock");
+                    field.setAccessible(true);
+                    return field.get(null);
+                } catch (ReflectiveOperationException exception) {
+                    throw new AssertionError("Cannot pause blueprint preparation", exception);
+                }
+            });
+            synchronized (decoderLock) {
+                context.getInput().holdKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+                context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+                context.waitTicks(2);
+                context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+                context.getInput().lookAt(-90, 0);
+                context.waitTicks(2);
+                assertOnlySupport(world, support);
+            }
+            world.getServer().waitFor(server -> server.overworld().getBlockState(target).is(Blocks.STONE)
+                && server.overworld().getBlockState(target.east()).is(Blocks.LAPIS_BLOCK)
+                && server.overworld().getBlockState(target.south(2)).is(Blocks.GOLD_BLOCK)
+                && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);
+            context.waitTicks(16);
+            assertInstantToolUnchanged(context, StackBuilderTool.class, 6);
+            world.getServer().runOnServer(server -> require(countFixtureBlocks(server.overworld()) == 3
+                && countTaggedEntities(server.overworld(), "blueprint_saved") == 1,
+                "Holding instant-use pasted more than one copy"));
+            context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.waitTicks(2);
+            context.runOnClient(client -> UserAction.UNDO.call(null));
+            world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 0
+                && countTaggedEntities(server.overworld(), "blueprint_saved") == 0);
+            assertOnlySupport(world, support);
+
+            // A new press works from the offhand and respects Axiom's entity-copy setting.
+            context.runOnClient(client -> {
+                selectBuilderTool(CloneBuilderTool.class);
+                BuilderToolManager.copyEntities = false;
+                ItemStack token = client.player.getMainHandItem();
+                client.player.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+                client.player.setItemInHand(InteractionHand.OFF_HAND, token);
+                client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                    new net.minecraft.world.phys.Vec3(0.5, 98.95, 3.5));
+            });
+            context.waitTicks(2);
+            context.getInput().holdKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 3);
+            context.waitTicks(3);
+            assertInstantToolUnchanged(context, CloneBuilderTool.class, 6);
+            context.runOnClient(client -> require(reference.equals(BlueprintItems.INSTANCE.reference(client.player.getOffhandItem()))
+                && client.player.getOffhandItem().getCount() == 1, "Instant placement changed or consumed the offhand token"));
+            world.getServer().runOnServer(server -> require(countTaggedEntities(server.overworld(), "blueprint_saved") == 0,
+                "Instant placement ignored Copy Entities=false"));
+            context.runOnClient(client -> UserAction.UNDO.call(null));
+            world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 0);
+            assertOnlySupport(world, support);
+        } finally {
+            context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.runOnClient(client -> {
+                BuilderToolManager.copyEntities = copyEntities;
+                cloneTool().reset(false);
+                BuilderToolManager.setToolSlotActive(false);
+            });
+            world.getServer().runCommand("setblock 0 98 3 air");
+            world.getServer().runCommand("tp @a 0.0 100.0 0.0 0 0");
+            context.waitFor(client -> Math.abs(client.player.getY() - 100) < 0.01);
+        }
+        assertWorldEmpty(world);
+    }
+
+    private static void assertInstantToolUnchanged(ClientGameTestContext context,
+                                                   Class<? extends BuilderTool> tool, int hotbarSlot) {
+        context.runOnClient(client -> {
+            require(!Axiom613Adapter.INSTANCE.isPlacing() && !Placement.INSTANCE.isPlacing() && !EditorUI.isEnabled(),
+                "Instant placement opened a movable preview or editor");
+            require(!BuilderToolManager.isToolSlotActive() && BuilderToolManager.selectedToolIs(tool)
+                && client.player.getInventory().getSelectedSlot() == hotbarSlot, "Instant placement changed the selected tool or hotbar slot");
+            require(cloneRegion() == null && cloneOffset() == null && !cloneBridge().blueprints$isImported(),
+                "Instant placement retained native Clone data");
+        });
     }
 
     /** Axiom handles rotate/flip from keybinds during world rendering, not EditorUI actions. */

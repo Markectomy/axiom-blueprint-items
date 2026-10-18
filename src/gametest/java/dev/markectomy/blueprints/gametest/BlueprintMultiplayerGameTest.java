@@ -115,6 +115,8 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
                 preparePlayer(context, control);
                 checkpoint("native repeat placement, saved entities, finish, restoration, and separate undo");
                 verifyPlacement(context, control, reference);
+                checkpoint("instant Shift placement, held-use suppression, and remote undo");
+                verifyInstantPlacement(context, control, reference);
                 checkpoint("server game-mode change cancels a pending preview");
                 verifyRevocation(context, control, reference);
                 checkpoint("dimension change clears the pending preview");
@@ -340,6 +342,41 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
         context.waitFor(client -> client.player.isCreative() && Axiom613Adapter.INSTANCE.isAvailable());
         preparePlayer(context, control);
         context.runOnClient(client -> require(!Axiom613Adapter.INSTANCE.isPlacing(), "Creative restoration revived a stale preview"));
+    }
+
+    private static void verifyInstantPlacement(ClientGameTestContext context, Control control, BlueprintReference reference) {
+        context.runOnClient(client -> {
+            selectBuilderTool(MoveBuilderTool.class);
+            BuilderToolManager.setToolSlotActive(false);
+            BuilderToolManager.copyEntities = true;
+            client.player.lookAt(EntityAnchorArgument.Anchor.EYES, new Vec3(0.5, 98.95, 3.5));
+        });
+        context.waitTicks(2);
+        context.getInput().holdKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+        context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+        try {
+            control.await(context, "if block 0 99 3 stone if block 1 99 3 lapis_block if block 0 99 5 gold_block"
+                + " if entity @e[tag=" + SAVED_ENTITY + ",limit=1]", "instant remote paste");
+            context.waitTicks(16);
+            context.runOnClient(client -> {
+                require(!Axiom613Adapter.INSTANCE.isPlacing() && !EditorUI.isEnabled() && !Placement.INSTANCE.isPlacing()
+                    && cloneRegion() == null && cloneOffset() == null, "Instant remote paste left a placement active");
+                require(!BuilderToolManager.isToolSlotActive() && BuilderToolManager.selectedToolIs(MoveBuilderTool.class)
+                    && client.player.getInventory().getSelectedSlot() == 0, "Instant remote paste changed the hotbar or tool");
+            });
+            control.command("scoreboard players set saved_count blueprint_test 0");
+            control.command("execute as @e[tag=" + SAVED_ENTITY + "] run scoreboard players add saved_count blueprint_test 1");
+            control.await(context, "if score saved_count blueprint_test matches 1 if block 0 100 3 air",
+                "held instant-use did not repeat");
+        } finally {
+            context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+        }
+        context.waitTicks(2);
+        context.runOnClient(client -> UserAction.UNDO.call(null));
+        control.await(context, "if block 0 99 3 air if block 1 99 3 air if block 0 99 5 air"
+            + " unless entity @e[tag=" + SAVED_ENTITY + "]", "instant remote undo");
+        control.await(context, "if items entity Player0 hotbar.0 " + predicate(reference), "instant paste kept its reusable token");
     }
 
     private static void startPreview(ClientGameTestContext context, BlueprintReference reference) {
