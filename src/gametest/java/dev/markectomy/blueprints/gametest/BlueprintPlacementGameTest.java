@@ -118,6 +118,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 verifyAirborneTargeting(context, world, reference);
                 context.runOnClient(client -> {
                     selectBuilderTool(MoveBuilderTool.class);
+                    client.player.getInventory().setSelectedSlot(4);
                     ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
                     client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
                     stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
@@ -150,6 +151,9 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
                 assertWorldEmpty(world);
                 assertRestoredTool(context, MoveBuilderTool.class);
+                assertSelectedHotbar(context, 4);
+                context.runOnClient(client -> require(reference.equals(BlueprintItems.INSTANCE.reference(client.player.getMainHandItem())),
+                    "Cancelling did not return to the held blueprint"));
                 context.runOnClient(client -> {
                     require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
                         "Could not start tool-switch cancellation proof");
@@ -158,6 +162,8 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 });
                 context.waitTicks(2);
                 assertRestoredTool(context, StackBuilderTool.class);
+                context.runOnClient(client -> require(BuilderToolManager.isToolSlotActive(),
+                    "Blueprint cleanup deactivated a manually selected builder tool"));
                 assertWorldEmpty(world);
                 context.runOnClient(client -> BuilderToolManager.setToolSlotActive(false));
                 context.waitTicks(2);
@@ -189,6 +195,9 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 });
                 context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
                 assertRestoredTool(context, StackBuilderTool.class);
+                assertSelectedHotbar(context, 4);
+                context.runOnClient(client -> require(reference.equals(BlueprintItems.INSTANCE.reference(client.player.getOffhandItem())),
+                    "Finishing changed the offhand blueprint"));
                 context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
                 context.waitFor(client -> Dispatcher.getHistoryDataCount() > 0);
                 checkpoint("native Clone undo blocks and saved entity");
@@ -201,9 +210,9 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 checkpoint("same-tool restoration, slot exit, and disconnect cleanup");
                 verifyPlacementCleanup(context, world, fixture);
                 checkpoint("repeat copies, explicit finish, and separate undo from Move, Stack, and Clone");
-                verifyRepeatPlacement(context, world, reference, MoveBuilderTool.class);
-                verifyRepeatPlacement(context, world, reference, StackBuilderTool.class);
-                verifyRepeatPlacement(context, world, reference, CloneBuilderTool.class);
+                verifyRepeatPlacement(context, world, reference, MoveBuilderTool.class, 0);
+                verifyRepeatPlacement(context, world, reference, StackBuilderTool.class, 4);
+                verifyRepeatPlacement(context, world, reference, CloneBuilderTool.class, 8);
                 checkpoint("all regressions passed");
             } finally {
                 context.runOnClient(client -> {
@@ -750,7 +759,16 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         });
     }
 
+    private static void assertSelectedHotbar(ClientGameTestContext context, int slot) {
+        context.waitTicks(2);
+        context.runOnClient(client -> {
+            require(!BuilderToolManager.isToolSlotActive(), "Finished blueprint left Axiom's tenth hotbar slot selected");
+            require(client.player.getInventory().getSelectedSlot() == slot, "Blueprint exit changed the selected inventory slot");
+        });
+    }
+
     private static void verifyPlacementCleanup(ClientGameTestContext context, TestSingleplayerContext world, Path fixture) {
+        int originalSlot = context.computeOnClient(client -> client.player.getInventory().getSelectedSlot());
         context.runOnClient(client -> {
             selectBuilderTool(CloneBuilderTool.class);
             require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
@@ -759,13 +777,15 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
         context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
         assertRestoredTool(context, CloneBuilderTool.class);
+        assertSelectedHotbar(context, originalSlot);
         context.runOnClient(client -> {
             selectBuilderTool(MoveBuilderTool.class);
             require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
                 "Could not start slot-exit proof");
-            BuilderToolManager.setToolSlotActive(false);
         });
+        context.getInput().pressKey(options -> options.keyHotbarSlots[2]);
         assertRestoredTool(context, MoveBuilderTool.class);
+        assertSelectedHotbar(context, 2);
         context.runOnClient(client -> {
             require(!BuilderToolManager.isToolSlotActive(), "Restoring a tool reactivated the exited tenth slot");
             require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), new BlockPos(0, 100, 0)),
@@ -804,6 +824,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         });
         context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
         assertRestoredTool(context, MoveBuilderTool.class);
+        assertSelectedHotbar(context, 2);
         context.runOnClient(client -> require(!Axiom613Adapter.INSTANCE.isPlacing(),
             "Finishing left a selection active in the restored Move tool"));
         context.runOnClient(client -> UserAction.UNDO.call(null));
@@ -813,17 +834,21 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
     }
 
     private static void verifyRepeatPlacement(ClientGameTestContext context, TestSingleplayerContext world,
-                                             BlueprintReference reference, Class<? extends BuilderTool> previousTool) {
+                                             BlueprintReference reference, Class<? extends BuilderTool> previousTool, int hotbarSlot) {
         context.getInput().lookAt(0, 0);
         context.runOnClient(client -> {
             selectBuilderTool(previousTool);
             BuilderToolManager.setToolSlotActive(false);
+            client.player.getInventory().setSelectedSlot(hotbarSlot);
             ItemStack stack = BlueprintItems.INSTANCE.createStack(reference);
             client.player.setItemInHand(InteractionHand.MAIN_HAND, stack);
             stack.use(client.level, client.player, InteractionHand.MAIN_HAND);
         });
         context.waitFor(client -> cloneRegion() != null);
         context.runOnClient(client -> require(!cloneBridge().blueprints$hasPlaced(), "New repeat preview retained a prior Finish hint"));
+        if (previousTool == MoveBuilderTool.class) {
+            context.runOnClient(client -> require(cloneTool().scroll(-2), "Could not bring the first copy within interaction reach"));
+        }
         ChunkedBlockRegion original = context.computeOnClient(client -> cloneRegion());
         BlockPos first = context.computeOnClient(client -> cloneOffset().immutable());
         context.waitTicks(2);
@@ -857,9 +882,28 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             assertBuilderMode(client);
             require(cloneRegion() == original, "Second copy replaced the reusable blueprint preview");
         });
-        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        if (previousTool == MoveBuilderTool.class) {
+            context.runOnClient(client -> client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                net.minecraft.world.phys.Vec3.atCenterOf(first)));
+            context.waitTicks(2);
+            context.runOnClient(client -> require(client.hitResult instanceof net.minecraft.world.phys.BlockHitResult hit
+                    && hit.getBlockPos().equals(first), "Finish-click fixture is not aimed at the placed build"));
+            context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+            try {
+                context.waitTicks(10);
+                world.getServer().runOnServer(server -> require(countFixtureBlocks(server.overworld()) == 6,
+                    "Holding Finish broke blocks after returning to the hotbar"));
+            } finally {
+                context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+            }
+        } else {
+            context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        }
         context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
         assertRestoredTool(context, previousTool);
+        assertSelectedHotbar(context, hotbarSlot);
+        context.runOnClient(client -> require(reference.equals(BlueprintItems.INSTANCE.reference(client.player.getMainHandItem())),
+            "Finishing repeat placement did not return to the held blueprint"));
         context.runOnClient(client -> UserAction.UNDO.call(null));
         world.getServer().waitFor(server -> countFixtureBlocks(server.overworld()) == 3
             && countTaggedEntities(server.overworld(), "blueprint_saved") == 1);

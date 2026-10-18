@@ -54,8 +54,9 @@ confirming. You can still move the preview downward with Axiom's controls.
 - Left-click cancels before the first copy, or finishes after placing copies.
 
 The preview stays active until you finish, regardless of your original tool,
-just like Axiom's normal Clone tool. Finishing or cancelling restores the tool
-you had selected before using the blueprint. On-screen hints show the controls;
+just like Axiom's normal Clone tool. Finishing or cancelling returns to your
+normal hotbar slot and restores the Axiom tool you had selected before using
+the blueprint. On-screen hints show the controls;
 **Cancel** changes to **Finish** after the first copy. Finishing keeps the copies
 you already placed.
 

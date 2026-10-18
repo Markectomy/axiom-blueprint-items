@@ -220,7 +220,7 @@ object Axiom613Adapter {
         val client = Minecraft.getInstance()
         val player = client.player ?: return false
         val level = client.level ?: return false
-        if (!player.isCreative || !isAvailable() || isPlacing() || prepared.region.isEmpty) return false
+        if (importedPlacement != null || !player.isCreative || !isAvailable() || isPlacing() || prepared.region.isEmpty) return false
         val minimum = prepared.region.min() ?: return false
         val tools = BuilderToolManager.getTools()
         val previousTool = tools.getOrNull(BuilderToolManager.getToolSlotSelected()) ?: return false
@@ -252,11 +252,15 @@ object Axiom613Adapter {
         val bridge = placement.clone as BlueprintCloneBridge
         bridge.`blueprints$inputTick`()
         if (bridge.`blueprints$isImported`()) return
-        importedPlacement = null
         val tools = BuilderToolManager.getTools()
         val stillSelected = tools.getOrNull(BuilderToolManager.getToolSlotSelected()) === placement.clone
+        // Finish must not become a held block-breaking action after leaving the tool slot.
+        if (stillSelected && BuilderToolManager.isToolSlotActive() && Minecraft.getInstance().options.keyAttack.isDown) return
+        importedPlacement = null
         // A manual tool switch takes precedence over the saved selection.
         if (stillSelected) {
+            placement.clone.reset(false)
+            BuilderToolManager.setToolSlotActive(false)
             val previousIndex = tools.indexOf(placement.previousTool)
             if (previousIndex >= 0) BuilderToolManager.setToolSlotSelected(previousIndex)
         }

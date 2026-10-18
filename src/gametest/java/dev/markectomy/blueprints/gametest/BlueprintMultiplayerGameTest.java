@@ -302,7 +302,13 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
         context.runOnClient(client -> require(cloneRegion() == original, "Second remote copy replaced the reusable preview"));
         context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
         context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing() && BuilderToolManager.selectedToolIs(MoveBuilderTool.class));
-        context.runOnClient(client -> require(!((BlueprintCloneBridge) cloneTool()).blueprints$hasPlaced(), "Remote finish retained its hint state"));
+        context.runOnClient(client -> {
+            require(!((BlueprintCloneBridge) cloneTool()).blueprints$hasPlaced(), "Remote finish retained its hint state");
+            require(!BuilderToolManager.isToolSlotActive(), "Remote finish left the tenth hotbar slot selected");
+            require(client.player.getInventory().getSelectedSlot() == 0
+                    && reference.equals(BlueprintItems.INSTANCE.reference(client.player.getMainHandItem())),
+                "Remote finish did not return to the held blueprint");
+        });
         context.waitFor(client -> Dispatcher.getHistoryDataCount() > 0);
         context.runOnClient(client -> UserAction.UNDO.call(null));
         control.await(context, "if block 4 99 3 air if block 5 99 3 air if block 4 99 5 air"
@@ -311,6 +317,16 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
         control.await(context, "if block 0 99 3 air if block 1 99 3 air if block 0 99 5 air"
             + " unless entity @e[tag=" + SAVED_ENTITY + "]", "native Axiom undo");
         control.await(context, "if items entity Player0 hotbar.0 " + predicate(reference), "placement did not consume token");
+        startPreview(context, reference);
+        context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+        context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing() && !BuilderToolManager.isToolSlotActive());
+        context.runOnClient(client -> {
+            require(!BuilderToolManager.isToolSlotActive(), "Remote cancellation left the tenth hotbar slot selected");
+            require(client.player.getInventory().getSelectedSlot() == 0
+                    && reference.equals(BlueprintItems.INSTANCE.reference(client.player.getMainHandItem())),
+                "Remote cancellation did not return to the held blueprint");
+        });
+        assertUnchanged(context, control);
     }
 
     private static void verifyRevocation(ClientGameTestContext context, Control control, BlueprintReference reference) {
