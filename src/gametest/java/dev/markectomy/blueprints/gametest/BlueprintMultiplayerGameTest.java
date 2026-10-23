@@ -115,7 +115,7 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
                 preparePlayer(context, control);
                 checkpoint("native repeat placement, saved entities, finish, restoration, and separate undo");
                 verifyPlacement(context, control, reference);
-                checkpoint("instant Shift placement, held-use suppression, and remote undo");
+                checkpoint("instant Shift placement, held repeats, release, and separate remote undo");
                 verifyInstantPlacement(context, control, reference);
                 checkpoint("server game-mode change cancels a pending preview");
                 verifyRevocation(context, control, reference);
@@ -364,19 +364,47 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
                 require(!BuilderToolManager.isToolSlotActive() && BuilderToolManager.selectedToolIs(MoveBuilderTool.class)
                     && client.player.getInventory().getSelectedSlot() == 0, "Instant remote paste changed the hotbar or tool");
             });
-            control.command("scoreboard players set saved_count blueprint_test 0");
-            control.command("execute as @e[tag=" + SAVED_ENTITY + "] run scoreboard players add saved_count blueprint_test 1");
-            control.await(context, "if score saved_count blueprint_test matches 1 if block 0 100 3 air",
-                "held instant-use did not repeat");
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.waitTicks(3);
+            int copies = savedCopies(control);
+            require(copies >= 2, "Held remote instant-use did not repeat");
+            context.waitTicks(12);
+            require(savedCopies(control) == copies, "Releasing Sneak continued remote pasting");
+            context.runOnClient(client -> require(!Axiom613Adapter.INSTANCE.isPlacing(),
+                "Releasing Sneak while holding Use opened a remote preview"));
         } finally {
             context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
             context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
         }
         context.waitTicks(2);
-        context.runOnClient(client -> UserAction.UNDO.call(null));
+        int copies = savedCopies(control);
+        for (int remaining = copies - 1; remaining >= 0; remaining--) {
+            context.runOnClient(client -> UserAction.UNDO.call(null));
+            awaitSavedCopies(context, control, remaining);
+        }
         control.await(context, "if block 0 99 3 air if block 1 99 3 air if block 0 99 5 air"
             + " unless entity @e[tag=" + SAVED_ENTITY + "]", "instant remote undo");
         control.await(context, "if items entity Player0 hotbar.0 " + predicate(reference), "instant paste kept its reusable token");
+    }
+
+    private static int savedCopies(Control control) {
+        control.command("scoreboard players set saved_count blueprint_test 0");
+        control.command("execute as @e[tag=" + SAVED_ENTITY + "] run scoreboard players add saved_count blueprint_test 1");
+        var result = control.command("scoreboard players get saved_count blueprint_test");
+        var pattern = java.util.regex.Pattern.compile("saved_count has (\\d+)");
+        for (var line : result.getAsJsonArray("lines")) {
+            var match = pattern.matcher(line.getAsString());
+            if (match.find()) return Integer.parseInt(match.group(1));
+        }
+        throw new AssertionError("Could not count remote blueprint copies: " + result);
+    }
+
+    private static void awaitSavedCopies(ClientGameTestContext context, Control control, int expected) {
+        for (int attempt = 0; attempt < 30; attempt++) {
+            if (savedCopies(control) == expected) return;
+            context.waitTicks(2);
+        }
+        throw new AssertionError("Remote instant copies did not have separate undo entries; expected " + expected);
     }
 
     private static void startPreview(ClientGameTestContext context, BlueprintReference reference) {

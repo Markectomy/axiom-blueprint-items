@@ -37,13 +37,22 @@ Search by name or select tags. Multiple selected tags must all match.
 **Refresh** rereads the library, including nested folders. The filter panel uses
 Minecraft GUI textures, so resource packs can change its appearance.
 
+The tab shows one item per file across all folders. Packs that contain both an
+"all blueprints" folder and categorized copies therefore show both copies.
+The **Source** line in each item's tooltip shows its relative library path.
+Different files with the same name remain separate library links.
+
 ## Placement
 
 Hold **Sneak (Shift by default)** and right-click to place one copy immediately
 at the surface you aim at, without opening the movable preview. Your selected
-hotbar slot and Axiom tool stay unchanged. Release right-click before placing
-another copy; holding it does not keep pasting. Axiom's normal undo works for
-these placements too.
+hotbar slot and Axiom tool stay unchanged. Keep both held to place more copies
+at Minecraft's normal right-click pace, following your current aim. Release
+either control to stop repeating. Each copy has its own Axiom undo entry.
+Only one blueprint loads at a time; large sources may place more slowly, and
+busy attempts are skipped instead of queued. Repeats also pause when Axiom's
+send budget is exhausted. An unreadable source stops the
+repeat until you release right-click.
 
 Take a blueprint item into your inventory and right-click the air. This starts
 Axiom's Clone preview in its tenth hotbar slot and keeps you in creative mode.
@@ -91,6 +100,12 @@ representation.
 
 Saved entities follow Axiom's **Copy Entities** setting and are included in undo.
 Entity-only blueprints are currently unsupported.
+
+Older version-0 blueprints that omit their Minecraft data version use the
+Minecraft 1.20.1 compatibility baseline for Axiom's normal data conversion.
+Conversion happens in memory for loading and previews; source files stay intact.
+Blueprints with a saved data version use it for conversion. Truly missing modded
+blocks still prevent loading, with a message pointing to the client log.
 
 ## Item previews
 

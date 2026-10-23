@@ -213,8 +213,14 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 verifyRepeatPlacement(context, world, reference, MoveBuilderTool.class, 0);
                 verifyRepeatPlacement(context, world, reference, StackBuilderTool.class, 4);
                 verifyRepeatPlacement(context, world, reference, CloneBuilderTool.class, 8);
-                checkpoint("instant placement, click snapshot, held-use suppression, offhand, and undo");
+                checkpoint("instant placement, click snapshot, Sneak release, offhand, and undo");
                 verifyInstantPlacement(context, world, reference);
+                checkpoint("held instant placement follows aim, stops on release, and undoes each copy");
+                verifyHeldInstantPlacement(context, world, reference);
+                checkpoint("legacy blueprint conversion, source tooltips, and read-only library audit");
+                BlueprintLegacyChecks.run(context, world, fixture.getParent());
+                verifySourceTooltips(context);
+                verifyLibraryCopies(context, fixture);
                 checkpoint("all regressions passed");
             } finally {
                 context.runOnClient(client -> {
@@ -428,6 +434,68 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
 
     private static void checkpoint(String name) {
         LOGGER.info("Blueprint regression checkpoint: {}", name);
+    }
+
+    private static void verifySourceTooltips(ClientGameTestContext context) {
+        context.runOnClient(client -> {
+            var reference = new BlueprintReference(1, "proof.bp", "Tooltip proof");
+            var tooltipContext = net.minecraft.world.item.Item.TooltipContext.of(client.level);
+            var linked = BlueprintItems.INSTANCE.createStack(reference);
+            var portableBefore = linked.copy();
+            var lines = linked.getTooltipLines(tooltipContext, client.player, net.minecraft.world.item.TooltipFlag.NORMAL);
+            String source = net.minecraft.network.chat.Component.translatable("tooltip.axiom_blueprint_items.source", reference.getPath()).getString();
+            require(lines.stream().filter(line -> line.getString().equals(source)).count() == 1,
+                "Blueprint source tooltip is missing or duplicated");
+            var legacy = new ItemStack(BlueprintItems.INSTANCE.getITEM());
+            legacy.set(BlueprintItems.INSTANCE.getREFERENCE(), reference);
+            require(legacy.getTooltipLines(tooltipContext, client.player, net.minecraft.world.item.TooltipFlag.NORMAL).stream()
+                .filter(line -> line.getString().equals(source)).count() == 1, "Legacy blueprint source tooltip is missing");
+            require(ItemStack.isSameItemSameComponents(portableBefore, linked), "Tooltip changed persistent item data");
+            var paper = new ItemStack(net.minecraft.world.item.Items.PAPER);
+            require(paper.getTooltipLines(tooltipContext, client.player, net.minecraft.world.item.TooltipFlag.NORMAL).stream()
+                .noneMatch(line -> line.getString().startsWith("Source:")), "Ordinary paper received a blueprint source tooltip");
+            var longReference = new BlueprintReference(1, "nested/".repeat(160) + "blueprint.bp", "Long path");
+            var longLines = BlueprintItems.INSTANCE.createStack(longReference)
+                .getTooltipLines(tooltipContext, client.player, net.minecraft.world.item.TooltipFlag.NORMAL).stream()
+                .filter(line -> net.minecraft.network.chat.TextColor.GRAY.equals(line.getStyle().getColor())).toList();
+            int maximumWidth = Math.min(240, Math.max(1, client.getWindow().getGuiScaledWidth() - 24));
+            require(longLines.size() == 3 && longLines.getLast().getString().endsWith("…"),
+                "Long source paths did not stop at three tooltip lines");
+            require(longLines.stream().allMatch(line -> client.font.width(line) <= maximumWidth),
+                "Source tooltip overflowed the scaled window width");
+        });
+    }
+
+    private static void verifyLibraryCopies(ClientGameTestContext context, Path fixture) throws IOException {
+        Path copies = Files.createTempDirectory(fixture.getParent(), "addon-library-copies-");
+        try {
+            Path first = Files.createDirectories(copies.resolve("All BPS")).resolve("same.bp");
+            Path second = Files.createDirectories(copies.resolve("trees")).resolve("same.bp");
+            Path variant = copies.resolve("variant.bp");
+            Files.copy(fixture, first);
+            Files.copy(fixture, second);
+            context.runOnClient(client -> writeFixture(variant, "Placement proof", List.of("variant")));
+            String prefix = copies.getFileName() + "/";
+            for (int refresh = 0; refresh < 3; refresh++) {
+                context.runOnClient(client -> BlueprintLibrary.INSTANCE.refresh());
+                context.waitFor(client -> !BlueprintLibrary.INSTANCE.getSnapshot().getLoading());
+                context.runOnClient(client -> {
+                    var entries = BlueprintLibrary.INSTANCE.getSnapshot().getEntries().stream()
+                        .filter(entry -> entry.getReference().getPath().startsWith(prefix)).toList();
+                    require(entries.size() == 3, "Library refresh accumulated duplicates or hid separate source files");
+                    require(entries.stream().map(entry -> entry.getReference().getPath()).distinct().count() == 3,
+                        "Separate source files lost their relative identity");
+                    require(entries.stream().allMatch(entry -> entry.getName().equals("Placement proof")),
+                        "Same-name fixture did not preserve its display names");
+                });
+            }
+        } finally {
+            try (var paths = Files.walk(copies)) {
+                for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+            }
+            context.runOnClient(client -> BlueprintLibrary.INSTANCE.refresh());
+            context.waitFor(client -> !BlueprintLibrary.INSTANCE.getSnapshot().getLoading());
+        }
     }
 
     private static boolean browserContains(Minecraft client, BlueprintReference reference) {
@@ -967,7 +1035,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             assertInstantToolUnchanged(context, StackBuilderTool.class, 6);
             world.getServer().runOnServer(server -> require(countFixtureBlocks(server.overworld()) == 3
                 && countTaggedEntities(server.overworld(), "blueprint_saved") == 1,
-                "Holding instant-use pasted more than one copy"));
+                "Releasing Sneak while holding Use did not stop instant placement"));
             context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
             context.waitTicks(2);
             context.runOnClient(client -> UserAction.UNDO.call(null));
@@ -1024,6 +1092,135 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             require(cloneRegion() == null && cloneOffset() == null && !cloneBridge().blueprints$isImported(),
                 "Instant placement retained native Clone data");
         });
+    }
+
+    private static void verifyHeldInstantPlacement(ClientGameTestContext context, TestSingleplayerContext world,
+                                                    BlueprintReference reference) {
+        BlockPos support = new BlockPos(0, 98, 3);
+        BlockPos secondSupport = new BlockPos(4, 98, 3);
+        world.getServer().runCommand("setblock 0 98 3 bedrock");
+        world.getServer().runCommand("setblock 4 98 3 bedrock");
+        world.getServer().runCommand("tp @a 0.0 180.0 0.0 0 0");
+        context.waitFor(client -> Math.abs(client.player.getY() - 180) < 0.01
+            && client.level.getBlockState(secondSupport).is(Blocks.BEDROCK));
+        boolean copyEntities = context.computeOnClient(client -> BuilderToolManager.copyEntities);
+        try {
+            context.runOnClient(client -> {
+                selectBuilderTool(MoveBuilderTool.class);
+                BuilderToolManager.setToolSlotActive(false);
+                BuilderToolManager.copyEntities = true;
+                client.player.getInventory().setSelectedSlot(2);
+                client.player.setItemInHand(InteractionHand.MAIN_HAND, BlueprintItems.INSTANCE.createStack(reference));
+                client.player.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+                client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                    new net.minecraft.world.phys.Vec3(0.5, 98.95, 3.5));
+            });
+            context.waitTicks(2);
+            context.getInput().holdKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.waitTicks(16);
+            int firstCopies = savedCopies(world);
+            require(firstCopies >= 2 && firstCopies <= 6, "Held instant placement did not follow vanilla use cadence: " + firstCopies);
+            context.runOnClient(client -> client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                new net.minecraft.world.phys.Vec3(4.5, 98.95, 3.5)));
+            context.waitTicks(8);
+            world.getServer().runOnServer(server -> require(server.overworld().getBlockState(support.above()).is(Blocks.STONE)
+                && server.overworld().getBlockState(secondSupport.above()).is(Blocks.STONE),
+                "Repeated placement did not follow the new aim"));
+            int previousDelay = context.computeOnClient(client -> dispatchDelay(null));
+            try {
+                context.runOnClient(client -> dispatchDelay(1000));
+                context.waitTicks(2);
+                int pausedCopies = savedCopies(world);
+                context.waitTicks(12);
+                require(savedCopies(world) == pausedCopies, "Repeated placement ignored Axiom's exhausted send budget");
+            } finally {
+                context.runOnClient(client -> dispatchDelay(previousDelay));
+            }
+            int pausedCopies = savedCopies(world);
+            context.waitTicks(8);
+            require(savedCopies(world) > pausedCopies, "Repeating did not resume after Axiom's send budget recovered");
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.waitTicks(3);
+            int copies = savedCopies(world);
+            require(copies > firstCopies, "Holding Use did not place additional copies");
+            context.waitTicks(12);
+            require(savedCopies(world) == copies, "Releasing Sneak continued pasting or queued delayed copies");
+            assertInstantToolUnchanged(context, MoveBuilderTool.class, 2);
+            context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.waitTicks(2);
+            for (int remaining = copies - 1; remaining >= 0; remaining--) {
+                int expected = remaining;
+                context.runOnClient(client -> UserAction.UNDO.call(null));
+                world.getServer().waitFor(server -> countTaggedEntities(server.overworld(), "blueprint_saved") == expected);
+            }
+            world.getServer().runOnServer(server -> require(countFixtureBlocks(server.overworld()) == 0,
+                "Undo did not remove all held-placement blocks"));
+
+            // A busy repeat cannot paste later after Use is released.
+            context.runOnClient(client -> client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
+                new net.minecraft.world.phys.Vec3(0.5, 98.95, 3.5)));
+            context.waitTicks(2);
+            context.getInput().holdKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            world.getServer().waitFor(server -> countTaggedEntities(server.overworld(), "blueprint_saved") > 0);
+            Object decoderLock = context.computeOnClient(client -> {
+                try {
+                    var field = Axiom613Adapter.class.getDeclaredField("rawDecodeLock");
+                    field.setAccessible(true);
+                    return field.get(null);
+                } catch (ReflectiveOperationException exception) {
+                    throw new AssertionError("Cannot pause repeated blueprint preparation", exception);
+                }
+            });
+            int stoppedCopies;
+            synchronized (decoderLock) {
+                context.waitTicks(12);
+                context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+                context.waitTicks(2);
+                stoppedCopies = savedCopies(world);
+            }
+            context.waitTicks(12);
+            require(savedCopies(world) == stoppedCopies, "Busy repeat pasted after releasing Use");
+            assertInstantToolUnchanged(context, MoveBuilderTool.class, 2);
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            for (int remaining = stoppedCopies - 1; remaining >= 0; remaining--) {
+                int expected = remaining;
+                context.runOnClient(client -> UserAction.UNDO.call(null));
+                world.getServer().waitFor(server -> countTaggedEntities(server.overworld(), "blueprint_saved") == expected);
+            }
+        } finally {
+            context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.runOnClient(client -> {
+                BuilderToolManager.copyEntities = copyEntities;
+                cloneTool().reset(false);
+                BuilderToolManager.setToolSlotActive(false);
+            });
+            world.getServer().runCommand("setblock 0 98 3 air");
+            world.getServer().runCommand("setblock 4 98 3 air");
+            world.getServer().runCommand("tp @a 0.0 100.0 0.0 0 0");
+            context.waitFor(client -> Math.abs(client.player.getY() - 100) < 0.01);
+        }
+        assertWorldEmpty(world);
+    }
+
+    private static int savedCopies(TestSingleplayerContext world) {
+        int[] count = {0};
+        world.getServer().runOnServer(server -> count[0] = countTaggedEntities(server.overworld(), "blueprint_saved"));
+        return count[0];
+    }
+
+    private static int dispatchDelay(Integer value) {
+        try {
+            var field = Dispatcher.class.getDeclaredField("delayDueToExhausedDispatchSends");
+            field.setAccessible(true);
+            int previous = field.getInt(null);
+            if (value != null) field.setInt(null, value);
+            return previous;
+        } catch (ReflectiveOperationException exception) {
+            throw new AssertionError("Cannot simulate Axiom dispatch backpressure", exception);
+        }
     }
 
     /** Axiom handles rotate/flip from keybinds during world rendering, not EditorUI actions. */

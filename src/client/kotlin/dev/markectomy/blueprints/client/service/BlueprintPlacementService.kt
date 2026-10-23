@@ -4,6 +4,7 @@ import dev.markectomy.blueprints.BlueprintItems
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter
 import dev.markectomy.blueprints.data.LibraryPaths
 import dev.markectomy.blueprints.domain.BlueprintReference
+import dev.markectomy.blueprints.domain.BlueprintLoadFailure
 import net.minecraft.client.Minecraft
 import net.minecraft.client.multiplayer.ClientLevel
 import net.minecraft.client.player.LocalPlayer
@@ -26,10 +27,13 @@ class BlueprintPlacementService : AutoCloseable {
         class Loading(
             player: LocalPlayer,
             level: ClientLevel,
+            val reference: BlueprintReference,
             val mode: PlacementMode,
             val target: BlockPos,
+            val repeated: Boolean,
         ) : UseState(player, level)
 
+        class RepeatReady(player: LocalPlayer, level: ClientLevel, val reference: BlueprintReference) : UseState(player, level)
         class AwaitingRelease(player: LocalPlayer, level: ClientLevel) : UseState(player, level)
     }
 
@@ -43,7 +47,14 @@ class BlueprintPlacementService : AutoCloseable {
         val client = Minecraft.getInstance()
         val player = client.player ?: return
         val level = client.level ?: return
-        if (useState != null || closed) return
+        val repeat = useState as? UseState.RepeatReady
+        if ((useState != null && repeat == null) || closed) return
+        if (repeat != null && (repeat.player !== player || repeat.level !== level ||
+            !repeatHeld(client) || repeat.reference != reference)
+        ) {
+            awaitRelease(player, level)
+            return
+        }
         if (!player.isCreative) {
             message("Blueprint items require creative mode.")
             return
@@ -56,6 +67,7 @@ class BlueprintPlacementService : AutoCloseable {
             message("Finish or cancel your current Axiom placement first.")
             return
         }
+        if (repeat != null && !Axiom613Adapter.canRepeatPlacement()) return
         val root = Axiom613Adapter.libraryRoot()
         val mode = if (client.options.keyShift.isDown) PlacementMode.IMMEDIATE else PlacementMode.PREVIEW
         val hit = player.pick(SURFACE_TARGET_DISTANCE, 1.0f, false)
@@ -64,7 +76,7 @@ class BlueprintPlacementService : AutoCloseable {
         } else {
             BlockPos.containing(player.eyePosition.add(player.lookAngle.scale(5.0)))
         }
-        val request = UseState.Loading(player, level, mode, target)
+        val request = UseState.Loading(player, level, reference, mode, target, repeat != null)
         useState = request
         message("Loading ${reference.name}…")
         try {
@@ -75,33 +87,42 @@ class BlueprintPlacementService : AutoCloseable {
                 }
                 client.execute completion@ {
                     if (useState !== request || closed) return@completion
-                    finishLoad(request)
-                    if (client.player !== player || client.level !== level || !player.isCreative ||
-                        !Axiom613Adapter.isAvailable() || Axiom613Adapter.libraryRoot() != root ||
-                        InteractionHand.entries.none { BlueprintItems.reference(player.getItemInHand(it)) == reference }
-                    ) return@completion
-                    result.fold(
-                        onSuccess = { prepared ->
-                            if (Axiom613Adapter.isPlacing()) {
-                                message("Finish or cancel your current Axiom placement first.")
-                            } else if (Axiom613Adapter.isAvailable()) {
-                                val placed = if (request.mode == PlacementMode.IMMEDIATE) {
-                                    Axiom613Adapter.placeImmediately(prepared, request.target)
-                                } else {
-                                    Axiom613Adapter.start(prepared, request.target)
+                    var repeatAllowed = false
+                    try {
+                        if (client.player !== player || client.level !== level || !player.isCreative ||
+                            !Axiom613Adapter.isAvailable() || Axiom613Adapter.libraryRoot() != root ||
+                            !holdsReference(player, reference) || (request.repeated && !repeatHeld(client))
+                        ) return@completion
+                        if (request.repeated && !Axiom613Adapter.canRepeatPlacement()) {
+                            repeatAllowed = true
+                            return@completion
+                        }
+                        result.fold(
+                            onSuccess = { prepared ->
+                                if (Axiom613Adapter.isPlacing()) {
+                                    message("Finish or cancel your current Axiom placement first.")
+                                } else if (Axiom613Adapter.isAvailable()) {
+                                    val placed = if (request.mode == PlacementMode.IMMEDIATE) {
+                                        Axiom613Adapter.placeImmediately(prepared, request.target)
+                                    } else {
+                                        Axiom613Adapter.start(prepared, request.target)
+                                    }
+                                    repeatAllowed = placed && request.mode == PlacementMode.IMMEDIATE
+                                    if (placed) {
+                                        message(if (request.mode == PlacementMode.IMMEDIATE) "Placed ${reference.name}." else reference.name)
+                                    } else {
+                                        message("Axiom could not place this blueprint. Check builder permissions and that it contains blocks.")
+                                    }
                                 }
-                                if (placed) {
-                                    message(if (request.mode == PlacementMode.IMMEDIATE) "Placed ${reference.name}." else reference.name)
-                                } else {
-                                    message("Axiom could not place this blueprint. Check builder permissions and that it contains blocks.")
-                                }
-                            }
-                        },
-                        onFailure = { error ->
-                            LOGGER.warn("Unable to load blueprint {}", reference.path, error)
-                            message("Cannot load ${reference.name}. Its library file is missing or unreadable.")
-                        },
-                    )
+                            },
+                            onFailure = { error ->
+                                LOGGER.warn("Unable to load blueprint {}", reference.path, error)
+                                message("Cannot load ${reference.name}. ${BlueprintLoadFailure.classify(error).description}")
+                            },
+                        )
+                    } finally {
+                        if (useState === request) finishLoad(request, repeatAllowed)
+                    }
                 }
             }
         } catch (_: RejectedExecutionException) {
@@ -113,22 +134,44 @@ class BlueprintPlacementService : AutoCloseable {
         Axiom613Adapter.validateImportedPreview()
         val state = useState ?: return
         val client = Minecraft.getInstance()
+        val repeatReference = when (state) {
+            is UseState.RepeatReady -> state.reference
+            is UseState.Loading -> state.reference.takeIf { state.repeated }
+            is UseState.AwaitingRelease -> null
+        }
         if (client.player !== state.player || client.level !== state.level ||
             !state.player.isCreative || !Axiom613Adapter.isAvailable()
         ) {
             invalidate()
+        } else if (repeatReference != null && (!repeatHeld(client) || !holdsReference(state.player, repeatReference))) {
+            awaitRelease(state.player, state.level)
+            worker.queue.clear()
         } else if (state is UseState.AwaitingRelease && !client.options.keyUse.isDown) {
             useState = null
         }
     }
 
-    private fun finishLoad(request: UseState.Loading) {
+    private fun finishLoad(request: UseState.Loading, repeatAllowed: Boolean = false) {
+        if (repeatAllowed && repeatHeld(Minecraft.getInstance())) {
+            useState = UseState.RepeatReady(request.player, request.level, request.reference)
+        } else {
+            awaitRelease(request.player, request.level)
+        }
+    }
+
+    private fun awaitRelease(player: LocalPlayer, level: ClientLevel) {
         useState = if (Minecraft.getInstance().options.keyUse.isDown) {
-            UseState.AwaitingRelease(request.player, request.level)
+            UseState.AwaitingRelease(player, level)
         } else {
             null
         }
     }
+
+    private fun repeatHeld(client: Minecraft): Boolean = client.options.keyUse.isDown &&
+        client.options.keyShift.isDown && client.gui.screen() == null
+
+    private fun holdsReference(player: LocalPlayer, reference: BlueprintReference): Boolean =
+        InteractionHand.entries.any { BlueprintItems.reference(player.getItemInHand(it)) == reference }
 
     fun invalidate() {
         useState = null

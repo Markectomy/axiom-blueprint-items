@@ -13,6 +13,7 @@ import com.moulberry.axiom.buildertools.CloneBuilderTool
 import com.moulberry.axiom.render.regions.ChunkedBlockRegion
 import com.moulberry.axiom.restrictions.AxiomPermission
 import com.moulberry.axiom.world_modification.BlockBuffer
+import com.moulberry.axiom.world_modification.Dispatcher
 import dev.markectomy.blueprints.domain.preview.VoxelPreview
 import net.minecraft.client.Minecraft
 import net.minecraft.client.multiplayer.ClientLevel
@@ -26,11 +27,14 @@ import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.level.material.MapColor
 import java.io.BufferedInputStream
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Objects
 
 data class BlueprintMetadata(val name: String, val tags: Set<String>)
 
@@ -61,6 +65,8 @@ object Axiom613Adapter {
     private const val MAX_PREVIEW_CHUNKS = 512
     private const val PREVIEW_AXIS = 24
     private const val MAP_COLORS = 64
+    // Axiom's first DFU-enabled release read unversioned blueprints on Minecraft 1.20.1.
+    private const val LEGACY_DATA_VERSION = 3465
     private val rawDecodeLock = Any()
     private val pngSignature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
 
@@ -214,6 +220,8 @@ object Axiom613Adapter {
         AxiomClient.hasPermission(AxiomPermission.BUILDERTOOL_CLONE) &&
         BuilderToolManager.canUseBuilderTools() && !EditorUI.isEnabled()
 
+    fun canRepeatPlacement(): Boolean = !Dispatcher.exhaustedDispatchSends()
+
     /** Client/render-thread-only. Caller must revalidate the prepared source and held reference. */
     fun start(prepared: PreparedBlueprint, position: BlockPos): Boolean {
         inputTick()
@@ -316,26 +324,66 @@ object Axiom613Adapter {
         if (Files.size(path) !in 1..maximumFile.toLong()) throw IOException("Blueprint file exceeds ${maximumFile / (1024 * 1024)} MiB")
         val bytes = Files.newInputStream(path).use { input -> input.readNBytes(maximumFile + 1) }
         if (bytes.size > maximumFile) throw IOException("Blueprint file exceeds ${maximumFile / (1024 * 1024)} MiB")
-        validateBuildEnvelope(bytes, maximumFile, maximumDecompressed, maximumChunks)
+        val validatedBytes = validateBuildEnvelope(bytes, maximumFile, maximumDecompressed, maximumChunks)
         val raw = synchronized(rawDecodeLock) {
             if (Thread.currentThread().isInterrupted) throw IOException("Blueprint preparation cancelled")
-            BlueprintIo.readRawBlueprint(ByteArrayInputStream(bytes))
+            BlueprintIo.readRawBlueprint(ByteArrayInputStream(validatedBytes))
         } ?: throw IOException("Blueprint could not be read")
         val blocks = raw.blocks() ?: throw IOException("Blueprint has no block data")
         if (blocks.size > maximumChunks) throw IOException("Blueprint exceeds $maximumChunks chunks")
         return raw
     }
 
-    private fun validateBuildEnvelope(bytes: ByteArray, maximumFile: Int, maximumDecompressed: Long, maximumChunks: Int) {
+    private fun validateBuildEnvelope(bytes: ByteArray, maximumFile: Int, maximumDecompressed: Long, maximumChunks: Int): ByteArray {
         DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-            readValidatedHeader(input)
+            val header = readValidatedHeader(input)
             val thumbnailSize = boundedLength(input.readInt(), MAX_THUMBNAIL, "thumbnail")
             input.skipNBytes(thumbnailSize.toLong())
+            val buildLengthOffset = bytes.size - input.available()
             boundedLength(input.readInt(), maximumFile, "build")
             // Enforce a quota before Axiom rereads these bytes with unlimitedHeap().
             val build = NbtIo.readCompressed(input, NbtAccounter.create(maximumDecompressed))
             if (build.getListOrEmpty("BlockRegion").size > maximumChunks) {
                 throw IOException("Blueprint exceeds $maximumChunks chunks")
+            }
+            if (header.getIntOr("Version", 0) != 0 || build.getIntOr("DataVersion", 0) != 0) return bytes
+
+            // Axiom 6.1.3 otherwise assumes today's data version and skips legacy block/entity fixes.
+            // Normalize only this private snapshot; retain the original header, thumbnail and library file.
+            build.putInt("DataVersion", LEGACY_DATA_VERSION)
+            val output = BoundedBlueprintOutput(maximumFile)
+            DataOutputStream(output).use { data ->
+                data.write(bytes, 0, buildLengthOffset)
+                data.writeInt(0)
+                NbtIo.writeCompressed(build, data)
+            }
+            val normalized = output.toByteArray()
+            ByteBuffer.wrap(normalized).putInt(buildLengthOffset, normalized.size - buildLengthOffset - Int.SIZE_BYTES)
+            return normalized
+        }
+    }
+
+    /** Bounds both stored bytes and buffer capacity, including the gzip trailer written on close. */
+    private class BoundedBlueprintOutput(private val maximum: Int) : ByteArrayOutputStream(minOf(8192, maximum)) {
+        override fun write(value: Int) {
+            reserve(1)
+            super.write(value)
+        }
+
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            Objects.checkFromIndexSize(offset, length, bytes.size)
+            reserve(length)
+            super.write(bytes, offset, length)
+        }
+
+        private fun reserve(additional: Int) {
+            if (additional > maximum - count) {
+                throw IOException("Blueprint file exceeds ${maximum / (1024 * 1024)} MiB after legacy migration")
+            }
+            val required = count + additional
+            if (required > buf.size) {
+                val capacity = minOf(maximum.toLong(), maxOf(required.toLong(), buf.size.toLong() * 2L)).toInt()
+                buf = buf.copyOf(capacity)
             }
         }
     }
