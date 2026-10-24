@@ -1,6 +1,7 @@
 .gradle/
 .kotlin/
 build/
+/*.jar
 run/
 logs/
 crash-reports/

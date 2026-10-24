@@ -20,6 +20,7 @@ import com.moulberry.axiom.utils.EntityDataUtils;
 import com.moulberry.axiom.world_modification.CompressedBlockEntity;
 import com.moulberry.axiom.world_modification.Dispatcher;
 import dev.markectomy.blueprints.BlueprintItems;
+import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings;
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter;
 import dev.markectomy.blueprints.client.integration.BlueprintCloneBridge;
 import dev.markectomy.blueprints.domain.BlueprintReference;
@@ -117,6 +118,8 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
                 verifyPlacement(context, control, reference);
                 checkpoint("instant Shift placement, held repeats, release, and separate remote undo");
                 verifyInstantPlacement(context, control, reference);
+                checkpoint("air-only preview and instant copies preserve occupied blocks and container data");
+                verifyAirOnly(context, control, fixture);
                 checkpoint("server game-mode change cancels a pending preview");
                 verifyRevocation(context, control, reference);
                 checkpoint("dimension change clears the pending preview");
@@ -397,6 +400,84 @@ public final class BlueprintMultiplayerGameTest implements FabricClientGameTest 
             if (match.find()) return Integer.parseInt(match.group(1));
         }
         throw new AssertionError("Could not count remote blueprint copies: " + result);
+    }
+
+    private static void verifyAirOnly(ClientGameTestContext context, Control control, Path fixture) {
+        boolean previousAirOnly = context.computeOnClient(client -> BlueprintPreviewSettings.INSTANCE.getCurrent().getAirOnly());
+        boolean previousEntities = context.computeOnClient(client -> BuilderToolManager.copyEntities);
+        boolean previousKeepExisting = context.computeOnClient(client -> BuilderToolManager.keepExisting);
+        try {
+            for (int x : new int[] {0, 4}) {
+                control.command("setblock " + x + " 99 3 chest{Items:[{Slot:0b,id:\"minecraft:diamond\",count:7}]}");
+                control.command("setblock " + (x + 2) + " 99 3 bedrock");
+                control.command("setblock " + (x + 1) + " 99 2 bedrock");
+                control.command("setblock " + (x + 1) + " 99 4 bedrock");
+                control.command("setblock " + (x + 1) + " 99 3 water");
+            }
+            context.waitFor(client -> client.level.getBlockState(TARGET).is(Blocks.CHEST)
+                && client.level.getBlockState(TARGET.offset(5, 0, 0)).is(Blocks.WATER));
+            context.runOnClient(client -> {
+                BuilderToolManager.copyEntities = false;
+                BuilderToolManager.keepExisting = false;
+                BlueprintPreviewSettings.INSTANCE.setAirOnly(false);
+                require(Axiom613Adapter.INSTANCE.start(Axiom613Adapter.INSTANCE.prepare(fixture), TARGET),
+                    "Could not start remote air-only preview");
+                BlueprintPreviewSettings.INSTANCE.setAirOnly(true);
+            });
+            context.waitTicks(3);
+            context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            assertAirOnlyCopy(context, control, 0, "gold_block", "masked remote preview");
+            context.getInput().pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+            context.waitFor(client -> !Axiom613Adapter.INSTANCE.isPlacing());
+            context.runOnClient(client -> {
+                require(!BuilderToolManager.keepExisting, "Air-only preview changed native Keep Existing");
+                require(Axiom613Adapter.INSTANCE.placeImmediately(Axiom613Adapter.INSTANCE.prepare(fixture), TARGET.offset(4, 0, 0)),
+                    "Remote air-only instant copy was rejected");
+            });
+            assertAirOnlyCopy(context, control, 4, "gold_block", "masked remote instant placement");
+            context.runOnClient(client -> UserAction.UNDO.call(null));
+            assertAirOnlyCopy(context, control, 4, "air", "masked remote instant undo");
+            context.runOnClient(client -> UserAction.UNDO.call(null));
+            assertAirOnlyCopy(context, control, 0, "air", "masked remote preview undo");
+            context.waitFor(client -> client.level.getBlockState(TARGET).is(Blocks.CHEST)
+                && client.level.getBlockState(TARGET.east()).is(Blocks.WATER)
+                && client.level.getBlockState(TARGET.south(2)).isAir());
+
+            context.runOnClient(client -> {
+                BlueprintPreviewSettings.INSTANCE.setAirOnly(false);
+                require(Axiom613Adapter.INSTANCE.placeImmediately(Axiom613Adapter.INSTANCE.prepare(fixture), TARGET),
+                    "Unmasked remote instant copy was rejected");
+            });
+            control.await(context, "if block 0 99 3 stone if block 1 99 3 lapis_block if block 0 99 5 gold_block",
+                "turning air-only off restores normal replacement");
+            context.runOnClient(client -> UserAction.UNDO.call(null));
+            assertAirOnlyCopy(context, control, 0, "air", "unmasked undo restores the occupied chest and water");
+        } finally {
+            context.runOnClient(client -> {
+                Axiom613Adapter.INSTANCE.clearImportedPreview();
+                BlueprintPreviewSettings.INSTANCE.setAirOnly(previousAirOnly);
+                BuilderToolManager.copyEntities = previousEntities;
+                BuilderToolManager.keepExisting = previousKeepExisting;
+            });
+            for (int x : new int[] {0, 4}) {
+                control.command("fill " + x + " 99 2 " + (x + 2) + " 99 5 air");
+            }
+            control.command("kill @e[type=item]");
+        }
+    }
+
+    private static void assertAirOnlyCopy(ClientGameTestContext context, Control control, int x, String gold,
+                                          String description) {
+        try {
+            control.await(context, "if block " + x + " 99 3 chest if block " + (x + 1) + " 99 3 water"
+                + " if block " + x + " 99 5 " + gold
+                + " if data block " + x + " 99 3 Items[{Slot:0b,id:\"minecraft:diamond\",count:7}]", description);
+        } catch (AssertionError failure) {
+            throw new AssertionError(description + "; chest data: " + control.command("data get block " + x + " 99 3")
+                + "; client blocks: " + context.computeOnClient(client -> client.level.getBlockState(TARGET.offset(x, 0, 0))
+                    + ", " + client.level.getBlockState(TARGET.offset(x + 1, 0, 0))
+                    + ", " + client.level.getBlockState(TARGET.offset(x, 0, 2))), failure);
+        }
     }
 
     private static void awaitSavedCopies(ClientGameTestContext context, Control control, int expected) {

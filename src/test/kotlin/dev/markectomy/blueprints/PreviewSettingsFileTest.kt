@@ -2,6 +2,7 @@ package dev.markectomy.blueprints
 
 import com.google.gson.JsonParser
 import dev.markectomy.blueprints.data.PreviewSettingsFile
+import dev.markectomy.blueprints.domain.InstantPlacementSpeed
 import dev.markectomy.blueprints.domain.PreviewStyle
 import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -27,10 +28,116 @@ class PreviewSettingsFileTest {
         assertEquals(PreviewStyle.HIGH_QUALITY, PreviewSettingsFile(path).loadStyle())
         assertTrue(Files.isRegularFile(path))
         assertEquals("high_quality", JsonParser.parseString(Files.readString(path)).asJsonObject["previewStyle"].asString)
+        assertEquals(InstantPlacementSpeed.NORMAL, PreviewSettingsFile(path).loadSettings().instantPlacementSpeed)
+        assertEquals("normal", JsonParser.parseString(Files.readString(path)).asJsonObject["instantPlacementSpeed"].asString)
+        assertFalse(PreviewSettingsFile(path).loadSettings().airOnly)
+        assertFalse(JsonParser.parseString(Files.readString(path)).asJsonObject["airOnly"].asBoolean)
         Files.writeString(path, """{"animatedPreviews":false}""")
         val original = Files.readAllBytes(path)
         assertEquals(PreviewStyle.STATIC, PreviewSettingsFile(path).loadStyle())
+        assertEquals(InstantPlacementSpeed.NORMAL, PreviewSettingsFile(path).loadSettings().instantPlacementSpeed)
         assertContentEquals(original, Files.readAllBytes(path))
+    }
+
+    @Test
+    fun `repeat speed defaults safely without rewriting existing settings`() {
+        val path = temporaryDirectory.resolve("settings.json")
+        val inputs = listOf(
+            "{}" to InstantPlacementSpeed.NORMAL,
+            """{"animatedPreviews":false}""" to InstantPlacementSpeed.NORMAL,
+            """{"instantPlacementSpeed":"normal"}""" to InstantPlacementSpeed.NORMAL,
+            """{"instantPlacementSpeed":"fast"}""" to InstantPlacementSpeed.FAST,
+            """{"instantPlacementSpeed":"slow"}""" to InstantPlacementSpeed.SLOW,
+            """{"instantPlacementSpeed":"future_speed"}""" to InstantPlacementSpeed.NORMAL,
+            """{"instantPlacementSpeed":true}""" to InstantPlacementSpeed.NORMAL,
+            """{"instantPlacementSpeed":0}""" to InstantPlacementSpeed.NORMAL,
+            """{"instantPlacementSpeed":null}""" to InstantPlacementSpeed.NORMAL,
+            """{"instantPlacementSpeed":[]}""" to InstantPlacementSpeed.NORMAL,
+            """{"instantPlacementSpeed":{}}""" to InstantPlacementSpeed.NORMAL
+        )
+        for ((content, expected) in inputs) {
+            Files.writeString(path, content)
+            val original = Files.readAllBytes(path)
+            assertEquals(expected, PreviewSettingsFile(path).loadSettings().instantPlacementSpeed)
+            assertEquals(expected, PreviewSettingsFile(path).loadSettings().instantPlacementSpeed)
+            assertContentEquals(original, Files.readAllBytes(path))
+        }
+    }
+
+    @Test
+    fun `slow repeat speed uses one second and survives reopening`() {
+        assertEquals(20, InstantPlacementSpeed.SLOW.intervalTicks)
+        assertEquals(6, InstantPlacementSpeed.NORMAL.intervalTicks)
+        assertEquals(4, InstantPlacementSpeed.FAST.intervalTicks)
+        val path = temporaryDirectory.resolve("settings.json")
+        PreviewSettingsFile(path).save(PreviewStyle.HIGH_QUALITY, InstantPlacementSpeed.SLOW)
+        assertEquals(InstantPlacementSpeed.SLOW, PreviewSettingsFile(path).loadSettings().instantPlacementSpeed)
+        assertEquals("slow", JsonParser.parseString(Files.readString(path)).asJsonObject["instantPlacementSpeed"].asString)
+    }
+
+    @Test
+    fun `air only defaults safely and accepts only JSON booleans without rewriting`() {
+        val path = temporaryDirectory.resolve("settings.json")
+        val inputs = listOf(
+            "{}" to false,
+            """{"previewStyle":"lightweight","instantPlacementSpeed":"fast"}""" to false,
+            """{"airOnly":true}""" to true,
+            """{"airOnly":false}""" to false,
+            """{"airOnly":"true"}""" to false,
+            """{"airOnly":1}""" to false,
+            """{"airOnly":null}""" to false,
+            """{"airOnly":[]}""" to false,
+            """{"airOnly":{}}""" to false
+        )
+        for ((content, expected) in inputs) {
+            Files.writeString(path, content)
+            val original = Files.readAllBytes(path)
+            assertEquals(expected, PreviewSettingsFile(path).loadSettings().airOnly)
+            assertEquals(expected, PreviewSettingsFile(path).loadSettings().airOnly)
+            assertContentEquals(original, Files.readAllBytes(path))
+        }
+    }
+
+    @Test
+    fun `air only persists independently and survives older save overloads`() {
+        val path = temporaryDirectory.resolve("settings.json")
+        Files.writeString(path, """{"future":{"value":null}}""")
+        val settings = PreviewSettingsFile(path)
+        settings.save(PreviewStyle.LIGHTWEIGHT, InstantPlacementSpeed.SLOW, true)
+        assertEquals(PreviewSettingsFile.Values(PreviewStyle.LIGHTWEIGHT, InstantPlacementSpeed.SLOW, true), settings.loadSettings())
+        settings.save(PreviewStyle.STATIC)
+        assertEquals(PreviewSettingsFile.Values(PreviewStyle.STATIC, InstantPlacementSpeed.SLOW, true), settings.loadSettings())
+        settings.save(true)
+        assertEquals(PreviewSettingsFile.Values(PreviewStyle.HIGH_QUALITY, InstantPlacementSpeed.SLOW, true), settings.loadSettings())
+        settings.save(PreviewStyle.LIGHTWEIGHT, InstantPlacementSpeed.FAST)
+        assertEquals(PreviewSettingsFile.Values(PreviewStyle.LIGHTWEIGHT, InstantPlacementSpeed.FAST, true), settings.loadSettings())
+        settings.save(PreviewStyle.HIGH_QUALITY, InstantPlacementSpeed.NORMAL, false)
+        assertEquals(PreviewSettingsFile.Values(), settings.loadSettings())
+        val saved = JsonParser.parseString(Files.readString(path)).asJsonObject
+        assertFalse(saved["airOnly"].asBoolean)
+        assertTrue(saved["future"].asJsonObject["value"].isJsonNull)
+        assertEquals(listOf(path), Files.list(path.parent).use { it.toList() })
+    }
+
+    @Test
+    fun `repeat speed and preview choices save independently and preserve unknown fields`() {
+        val path = temporaryDirectory.resolve("settings.json")
+        Files.writeString(path, """{"future":{"value":null}}""")
+        val settings = PreviewSettingsFile(path)
+        settings.save(PreviewStyle.LIGHTWEIGHT, InstantPlacementSpeed.FAST)
+        assertEquals(
+            PreviewSettingsFile.Values(PreviewStyle.LIGHTWEIGHT, InstantPlacementSpeed.FAST), settings.loadSettings()
+        )
+        settings.save(PreviewStyle.STATIC)
+        assertEquals(PreviewSettingsFile.Values(PreviewStyle.STATIC, InstantPlacementSpeed.FAST), settings.loadSettings())
+        settings.save(true)
+        assertEquals(PreviewSettingsFile.Values(PreviewStyle.HIGH_QUALITY, InstantPlacementSpeed.FAST), settings.loadSettings())
+        settings.save(PreviewStyle.HIGH_QUALITY, InstantPlacementSpeed.NORMAL)
+        assertEquals(PreviewSettingsFile.Values(), settings.loadSettings())
+        val saved = JsonParser.parseString(Files.readString(path)).asJsonObject
+        assertEquals("normal", saved["instantPlacementSpeed"].asString)
+        assertTrue(saved["future"].asJsonObject["value"].isJsonNull)
+        assertEquals(listOf(path), Files.list(path.parent).use { it.toList() })
     }
 
     @Test
@@ -123,7 +230,12 @@ class PreviewSettingsFileTest {
             Files.writeString(path, content)
             val original = Files.readAllBytes(path)
             assertTrue(PreviewSettingsFile(path).load())
+            assertEquals(InstantPlacementSpeed.NORMAL, PreviewSettingsFile(path).loadSettings().instantPlacementSpeed)
+            assertFalse(PreviewSettingsFile(path).loadSettings().airOnly)
             assertFailsWith<IOException> { PreviewSettingsFile(path).save(false) }
+            assertFailsWith<IOException> {
+                PreviewSettingsFile(path).save(PreviewStyle.LIGHTWEIGHT, InstantPlacementSpeed.SLOW, true)
+            }
             assertContentEquals(original, Files.readAllBytes(path))
         }
     }

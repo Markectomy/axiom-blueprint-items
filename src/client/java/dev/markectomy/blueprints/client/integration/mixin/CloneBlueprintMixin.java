@@ -1,6 +1,7 @@
 package dev.markectomy.blueprints.client.integration.mixin;
 
 import dev.markectomy.blueprints.client.integration.BlueprintCloneBridge;
+import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
@@ -19,6 +20,7 @@ import com.moulberry.axiom.utils.RegionHelper;
 import com.moulberry.axiom.packets.AxiomServerboundSpawnEntity;
 import com.moulberry.axiom.packets.AxiomServerboundManipulateEntity;
 import com.moulberry.axiom.world_modification.CompressedBlockEntity;
+import com.moulberry.axiom.world_modification.HistoryEntry;
 import com.moulberry.axiom.world_modification.undo.AdditionalUndoOperation;
 import com.moulberry.axiom.world_modification.undo.DeleteEntityAdditionalUndoOperation;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
@@ -145,6 +147,9 @@ abstract class CloneBlueprintMixin implements BlueprintCloneBridge {
     private void blueprints$pasteSavedEntities(ChunkedBlockRegion region, Long2ObjectMap<CompressedBlockEntity> data,
                                              BlockPos offset, String description, int modifiers,
                                              AdditionalUndoOperation undo, Operation<Void> original) {
+        if (blueprints$entities != null && BlueprintPreviewSettings.INSTANCE.getCurrent().getAirOnly()) {
+            modifiers |= HistoryEntry.MODIFIER_KEEP_EXISTING;
+        }
         if (blueprints$entities == null || blueprints$entities.isEmpty() || !BuilderToolManager.copyEntities) {
             original.call(region, data, offset, description, modifiers, undo);
             if (blueprints$entities != null) blueprints$hasPlaced = true;

@@ -1,6 +1,7 @@
 package dev.markectomy.blueprints.client.ui
 
 import dev.markectomy.blueprints.BlueprintItems
+import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings
 import dev.markectomy.blueprints.client.library.BlueprintLibrary
 import dev.markectomy.blueprints.client.mixin.ContainerScreenAccess
 import dev.markectomy.blueprints.client.mixin.CreativeScreenAccess
@@ -10,6 +11,7 @@ import net.fabricmc.fabric.api.client.screen.v1.Screens
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.AbstractWidget
 import net.minecraft.client.gui.components.Button
+import net.minecraft.client.gui.components.Checkbox
 import net.minecraft.client.gui.components.EditBox
 import net.minecraft.client.gui.components.Tooltip
 import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen
@@ -76,6 +78,7 @@ object BlueprintCreativeUi {
         private val clear: Button
         private val refresh: Button
         private val tagButtons: List<Button>
+        private var airOnly = airOnlyCheckbox()
 
         init {
             search.setMaxLength(100)
@@ -96,6 +99,7 @@ object BlueprintCreativeUi {
             clear.setTooltip(Tooltip.create(Component.literal("Clear name search and all selected tags")))
             refresh = button("Refresh", 50, 16) { BlueprintLibrary.refresh() }
             refresh.setTooltip(Tooltip.create(Component.literal("Reload your saved Axiom blueprints")))
+            widgets.add(airOnly)
             tagButtons = List(TAG_ROWS) { row ->
                 button("", 104, 14) {
                     tags.getOrNull(tagOffset + row)?.let { tag ->
@@ -110,6 +114,28 @@ object BlueprintCreativeUi {
 
         private fun button(label: String, width: Int, height: Int, action: () -> Unit): Button =
             Button.builder(Component.literal(label)) { action() }.bounds(0, 0, width, height).build().also { widgets.add(it) }
+
+        private fun airOnlyCheckbox(): Checkbox = Checkbox.builder(
+            Component.translatable("config.axiom_blueprint_items.air_only"), font
+        ).maxWidth(104)
+            .selected(BlueprintPreviewSettings.current.airOnly)
+            .onValueChange { _, enabled -> BlueprintPreviewSettings.setAirOnly(enabled) }
+            .tooltip(Tooltip.create(Component.translatable("config.axiom_blueprint_items.air_only.description")))
+            .build()
+
+        private fun updateAirOnly() {
+            if (airOnly.selected() == BlueprintPreviewSettings.current.airOnly) return
+            val previous = airOnly
+            airOnly = airOnlyCheckbox().apply {
+                setPosition(previous.x, previous.y)
+                visible = previous.visible
+                active = previous.active
+            }
+            widgets[widgets.indexOf(previous)] = airOnly
+            val screenWidgets = Screens.getWidgets(screen)
+            screenWidgets[screenWidgets.indexOf(previous)] = airOnly
+            if (screen.focused === previous) screen.setFocused(airOnly)
+        }
 
         fun updateSelection() {
             val wasActive = active
@@ -129,9 +155,11 @@ object BlueprintCreativeUi {
             clear.setY(panelY + 40)
             refresh.setX(panelX + 60)
             refresh.setY(panelY + 40)
+            airOnly.setX(panelX + 6)
+            airOnly.setY(panelY + 60)
             tagButtons.forEachIndexed { row, button ->
                 button.setX(panelX + 6)
-                button.setY(panelY + 72 + row * 15)
+                button.setY(panelY + 92 + row * 15)
             }
             widgets.forEach { it.visible = active; it.active = active }
             if (!active) search.isFocused = false
@@ -144,6 +172,7 @@ object BlueprintCreativeUi {
 
         fun tick() {
             if (!active) return
+            updateAirOnly()
             val snapshot = BlueprintLibrary.snapshot
             refresh.active = !snapshot.loading
             if (snapshot.revision == revision) return
@@ -176,12 +205,12 @@ object BlueprintCreativeUi {
             }
         }
 
-        fun contains(x: Double, y: Double): Boolean = active && x >= panelX && x < panelX + PANEL_WIDTH && y >= panelY && y < panelY + 136
+        fun contains(x: Double, y: Double): Boolean = active && x >= panelX && x < panelX + PANEL_WIDTH && y >= panelY && y < panelY + PANEL_HEIGHT
         fun searchFocused(): Boolean = active && search.isFocused
 
         fun scroll(x: Double, y: Double, amount: Double): Boolean {
             if (!contains(x, y)) return false
-            if (y >= panelY + 68 && y < panelY + 119 && amount != 0.0) {
+            if (y >= panelY + 88 && y < panelY + 139 && amount != 0.0) {
                 tagOffset = (tagOffset - amount.sign.toInt()).coerceIn(0, (tags.size - TAG_ROWS).coerceAtLeast(0))
                 updateTagButtons()
             }
@@ -195,7 +224,7 @@ object BlueprintCreativeUi {
             val sourceWidths = intArrayOf(border, 176 - border * 2, border)
             val sourceHeights = intArrayOf(border, 166 - border * 2, border)
             val targetWidths = intArrayOf(border, PANEL_WIDTH - border * 2, border)
-            val targetHeights = intArrayOf(border, 136 - border * 2, border)
+            val targetHeights = intArrayOf(border, PANEL_HEIGHT - border * 2, border)
             var y = panelY
             for (row in 0..2) {
                 var x = panelX
@@ -221,11 +250,11 @@ object BlueprintCreativeUi {
             drawInventoryPanel(graphics)
             graphics.text(font, "Filter library", panelX + 6, panelY + 7, TEXT_COLOR, true)
             val tagLabel = if (tags.size > TAG_ROWS) "Tags · ${tagOffset + 1}–${(tagOffset + TAG_ROWS).coerceAtMost(tags.size)}/${tags.size}" else "Tags · match all"
-            graphics.text(font, font.plainSubstrByWidth(tagLabel, 104), panelX + 6, panelY + 61, TEXT_COLOR, true)
-            if (tags.isEmpty()) graphics.text(font, "No saved tags", panelX + 6, panelY + 77, TEXT_COLOR, true)
+            graphics.text(font, font.plainSubstrByWidth(tagLabel, 104), panelX + 6, panelY + 81, TEXT_COLOR, true)
+            if (tags.isEmpty()) graphics.text(font, "No saved tags", panelX + 6, panelY + 97, TEXT_COLOR, true)
             if (tags.size > TAG_ROWS) {
                 val trackX = panelX + 112
-                val thumbY = panelY + 72 + (tagOffset * 33 / (tags.size - TAG_ROWS))
+                val thumbY = panelY + 92 + (tagOffset * 33 / (tags.size - TAG_ROWS))
                 graphics.blitSprite(RenderPipelines.GUI_TEXTURED, SCROLLER, trackX, thumbY, 2, 10)
             }
             val snapshot = BlueprintLibrary.snapshot
@@ -239,8 +268,8 @@ object BlueprintCreativeUi {
             val footer = if (snapshot.errorCount > 0 && !snapshot.loading && snapshot.error == null) {
                 "$matched / ${snapshot.entries.size} · ${snapshot.errorCount} skipped"
             } else status
-            graphics.text(font, font.plainSubstrByWidth(footer, 104), panelX + 6, panelY + 123, TEXT_COLOR, true)
-            if (contains(mouseX.toDouble(), mouseY.toDouble()) && mouseY >= panelY + 121) {
+            graphics.text(font, font.plainSubstrByWidth(footer, 104), panelX + 6, panelY + 143, TEXT_COLOR, true)
+            if (contains(mouseX.toDouble(), mouseY.toDouble()) && mouseY >= panelY + 141) {
                 val detail = snapshot.error ?: if (snapshot.errorCount > 0) "$status. ${snapshot.errorCount} unreadable files skipped; check the client log." else status
                 graphics.setTooltipForNextFrame(font, Component.literal(detail), mouseX, mouseY)
             }
@@ -251,6 +280,7 @@ object BlueprintCreativeUi {
     private val SCROLLER = Identifier.withDefaultNamespace("container/creative_inventory/scroller")
     private const val TEXT_COLOR = -1
     private const val PANEL_WIDTH = 116
+    private const val PANEL_HEIGHT = 156
     private const val TOTAL_WIDTH = 317
     private const val TAG_ROWS = 3
 }

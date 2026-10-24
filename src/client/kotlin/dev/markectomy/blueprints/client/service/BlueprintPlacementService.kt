@@ -1,6 +1,7 @@
 package dev.markectomy.blueprints.client.service
 
 import dev.markectomy.blueprints.BlueprintItems
+import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter
 import dev.markectomy.blueprints.data.LibraryPaths
 import dev.markectomy.blueprints.domain.BlueprintReference
@@ -23,24 +24,32 @@ import org.slf4j.LoggerFactory
 class BlueprintPlacementService : AutoCloseable {
     private enum class PlacementMode { PREVIEW, IMMEDIATE }
 
-    private sealed class UseState(val player: LocalPlayer, val level: ClientLevel) {
+    private sealed class UseState(
+        val player: LocalPlayer,
+        val level: ClientLevel,
+        val reference: BlueprintReference,
+        val mode: PlacementMode,
+    ) {
         class Loading(
             player: LocalPlayer,
             level: ClientLevel,
-            val reference: BlueprintReference,
-            val mode: PlacementMode,
+            reference: BlueprintReference,
+            mode: PlacementMode,
             val target: BlockPos,
             val repeated: Boolean,
-        ) : UseState(player, level)
+            val readyAtTick: Long,
+        ) : UseState(player, level, reference, mode)
 
-        class RepeatReady(player: LocalPlayer, level: ClientLevel, val reference: BlueprintReference) : UseState(player, level)
-        class AwaitingRelease(player: LocalPlayer, level: ClientLevel) : UseState(player, level)
+        class RepeatReady(player: LocalPlayer, level: ClientLevel, reference: BlueprintReference, val readyAtTick: Long) :
+            UseState(player, level, reference, PlacementMode.IMMEDIATE)
+        class AwaitingRelease(state: UseState) : UseState(state.player, state.level, state.reference, state.mode)
     }
 
     private val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1)) { task ->
         Thread(task, "blueprint-item-loader").apply { isDaemon = true }
     }
     private var useState: UseState? = null
+    private var clientTicks = 0L
     private var closed = false
 
     fun use(reference: BlueprintReference) {
@@ -52,7 +61,7 @@ class BlueprintPlacementService : AutoCloseable {
         if (repeat != null && (repeat.player !== player || repeat.level !== level ||
             !repeatHeld(client) || repeat.reference != reference)
         ) {
-            awaitRelease(player, level)
+            awaitRelease(repeat)
             return
         }
         if (!player.isCreative) {
@@ -67,7 +76,7 @@ class BlueprintPlacementService : AutoCloseable {
             message("Finish or cancel your current Axiom placement first.")
             return
         }
-        if (repeat != null && !Axiom613Adapter.canRepeatPlacement()) return
+        if (repeat != null && (clientTicks < repeat.readyAtTick || !Axiom613Adapter.canRepeatPlacement())) return
         val root = Axiom613Adapter.libraryRoot()
         val mode = if (client.options.keyShift.isDown) PlacementMode.IMMEDIATE else PlacementMode.PREVIEW
         val hit = player.pick(SURFACE_TARGET_DISTANCE, 1.0f, false)
@@ -76,7 +85,7 @@ class BlueprintPlacementService : AutoCloseable {
         } else {
             BlockPos.containing(player.eyePosition.add(player.lookAngle.scale(5.0)))
         }
-        val request = UseState.Loading(player, level, reference, mode, target, repeat != null)
+        val request = UseState.Loading(player, level, reference, mode, target, repeat != null, repeat?.readyAtTick ?: clientTicks)
         useState = request
         message("Loading ${reference.name}…")
         try {
@@ -87,14 +96,14 @@ class BlueprintPlacementService : AutoCloseable {
                 }
                 client.execute completion@ {
                     if (useState !== request || closed) return@completion
-                    var repeatAllowed = false
+                    var nextRepeatAtTick: Long? = null
                     try {
                         if (client.player !== player || client.level !== level || !player.isCreative ||
                             !Axiom613Adapter.isAvailable() || Axiom613Adapter.libraryRoot() != root ||
                             !holdsReference(player, reference) || (request.repeated && !repeatHeld(client))
                         ) return@completion
-                        if (request.repeated && !Axiom613Adapter.canRepeatPlacement()) {
-                            repeatAllowed = true
+                        if (request.repeated && (clientTicks < request.readyAtTick || !Axiom613Adapter.canRepeatPlacement())) {
+                            nextRepeatAtTick = request.readyAtTick
                             return@completion
                         }
                         result.fold(
@@ -107,7 +116,9 @@ class BlueprintPlacementService : AutoCloseable {
                                     } else {
                                         Axiom613Adapter.start(prepared, request.target)
                                     }
-                                    repeatAllowed = placed && request.mode == PlacementMode.IMMEDIATE
+                                    if (placed && request.mode == PlacementMode.IMMEDIATE) {
+                                        nextRepeatAtTick = clientTicks + BlueprintPreviewSettings.current.instantPlacementSpeed.intervalTicks
+                                    }
                                     if (placed) {
                                         message(if (request.mode == PlacementMode.IMMEDIATE) "Placed ${reference.name}." else reference.name)
                                     } else {
@@ -121,7 +132,7 @@ class BlueprintPlacementService : AutoCloseable {
                             },
                         )
                     } finally {
-                        if (useState === request) finishLoad(request, repeatAllowed)
+                        if (useState === request) finishLoad(request, nextRepeatAtTick)
                     }
                 }
             }
@@ -131,6 +142,7 @@ class BlueprintPlacementService : AutoCloseable {
     }
 
     fun tick() {
+        clientTicks++
         Axiom613Adapter.validateImportedPreview()
         val state = useState ?: return
         val client = Minecraft.getInstance()
@@ -144,24 +156,38 @@ class BlueprintPlacementService : AutoCloseable {
         ) {
             invalidate()
         } else if (repeatReference != null && (!repeatHeld(client) || !holdsReference(state.player, repeatReference))) {
-            awaitRelease(state.player, state.level)
+            awaitRelease(state)
             worker.queue.clear()
         } else if (state is UseState.AwaitingRelease && !client.options.keyUse.isDown) {
             useState = null
         }
     }
 
-    private fun finishLoad(request: UseState.Loading, repeatAllowed: Boolean = false) {
-        if (repeatAllowed && repeatHeld(Minecraft.getInstance())) {
-            useState = UseState.RepeatReady(request.player, request.level, request.reference)
-        } else {
-            awaitRelease(request.player, request.level)
+    /** Suppress premature native use attempts and their hand swings only during our instant-use session. */
+    fun suppressRepeatedUse(): Boolean {
+        val state = useState ?: return false
+        val client = Minecraft.getInstance()
+        if (state.mode != PlacementMode.IMMEDIATE || client.player !== state.player || client.level !== state.level ||
+            !holdsReference(state.player, state.reference) || Axiom613Adapter.isPlacing()
+        ) return false
+        return when (state) {
+            is UseState.Loading -> true
+            is UseState.RepeatReady -> !repeatHeld(client) || clientTicks < state.readyAtTick || !Axiom613Adapter.canRepeatPlacement()
+            is UseState.AwaitingRelease -> client.options.keyUse.isDown
         }
     }
 
-    private fun awaitRelease(player: LocalPlayer, level: ClientLevel) {
+    private fun finishLoad(request: UseState.Loading, nextRepeatAtTick: Long? = null) {
+        if (nextRepeatAtTick != null && repeatHeld(Minecraft.getInstance())) {
+            useState = UseState.RepeatReady(request.player, request.level, request.reference, nextRepeatAtTick)
+        } else {
+            awaitRelease(request)
+        }
+    }
+
+    private fun awaitRelease(state: UseState) {
         useState = if (Minecraft.getInstance().options.keyUse.isDown) {
-            UseState.AwaitingRelease(player, level)
+            UseState.AwaitingRelease(state)
         } else {
             null
         }

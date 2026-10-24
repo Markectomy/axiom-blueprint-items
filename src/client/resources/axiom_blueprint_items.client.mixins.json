@@ -8,6 +8,7 @@
     "BlueprintFrameMixin",
     "BlueprintItemModelMixin",
     "BlueprintStackMixin",
+    "BlueprintUseCadenceMixin",
     "ContainerScreenAccess",
     "CreativeScreenAccess",
     "CreativeScreenMixin",

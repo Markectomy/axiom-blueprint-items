@@ -1,6 +1,7 @@
 package dev.markectomy.blueprints.client.config
 
 import dev.markectomy.blueprints.client.render.BlueprintThumbnails
+import dev.markectomy.blueprints.domain.InstantPlacementSpeed
 import dev.markectomy.blueprints.domain.PreviewStyle
 import net.fabricmc.loader.api.FabricLoader
 import net.minecraft.client.Minecraft
@@ -40,10 +41,24 @@ object BlueprintPreviewSettings : AutoCloseable {
 
     fun setStyle(style: PreviewStyle) {
         if (closed || (current.style == style && !saveFailed)) return
-        current = PreviewSettings(style)
+        current = current.copy(style = style)
         BlueprintThumbnails.setStyle(style)
         persist()
     }
+
+    fun setInstantPlacementSpeed(speed: InstantPlacementSpeed) {
+        if (closed || (current.instantPlacementSpeed == speed && !saveFailed)) return
+        current = current.copy(instantPlacementSpeed = speed)
+        persist()
+    }
+
+    fun setAirOnly(airOnly: Boolean) {
+        if (closed || (current.airOnly == airOnly && !saveFailed)) return
+        current = current.copy(airOnly = airOnly)
+        persist()
+    }
+
+    fun toggleAirOnly() = setAirOnly(!current.airOnly)
 
     fun retrySave() {
         if (!closed && saveFailed) persist()

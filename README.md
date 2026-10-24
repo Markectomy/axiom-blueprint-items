@@ -47,8 +47,11 @@ Different files with the same name remain separate library links.
 Hold **Sneak (Shift by default)** and right-click to place one copy immediately
 at the surface you aim at, without opening the movable preview. Your selected
 hotbar slot and Axiom tool stay unchanged. Keep both held to place more copies
-at Minecraft's normal right-click pace, following your current aim. Release
-either control to stop repeating. Each copy has its own Axiom undo entry.
+following your current aim. **Normal** repeat speed waits at least one full
+normal hand swing (6 ticks, or 0.3 seconds) after each successful placement.
+The optional **Fast** setting in Mod Menu shortens this to 4 ticks.
+**Slow (1 second)** waits 20 ticks between successful placements.
+Release either control to stop repeating. Each copy has its own Axiom undo entry.
 Only one blueprint loads at a time; large sources may place more slowly, and
 busy attempts are skipped instead of queued. Repeats also pause when Axiom's
 send budget is exhausted. An unreadable source stops the
@@ -79,6 +82,21 @@ Undo works through Axiom as usual; finish an active repeat-copy preview first.
 Manually switching tools during the preview cancels it without pasting and keeps
 the tool you chose. Existing builder selections and editor placements must be
 finished or cancelled before starting another blueprint.
+
+Enable **Air only** in the Blueprints library sidebar or Mod Menu to place blocks
+only in empty air, preserving existing blocks, fluids, plants, and container data.
+It starts off and applies to both movable previews and instant placements.
+You can change it while a preview is active; the next copy uses the current setting.
+Assign **Toggle air-only blueprint placement** under **Controls → Key Binds →
+Axiom Blueprint Items** for a shortcut while playing. It is unbound by default
+and shows an on/off message when pressed. The setting saves automatically and
+does not change your search, tags, inventory links, or native Axiom tool settings.
+
+Air only uses Axiom 6.1.3's native **Keep Existing** placement handling, based on
+blocks known to your client when confirming each copy. On multiplayer servers,
+another player's simultaneous edits can arrive after that check; it is not an
+atomic server-side air mask. Server permissions still apply. Saved entities
+continue to follow Axiom's **Copy Entities** setting.
 
 ## Library links
 
@@ -151,6 +169,9 @@ Without Mod Menu, edit `previewStyle` in `config/axiom-blueprint-items.json` to
 `"high_quality"`, `"lightweight"`, or `"static"`, then restart Minecraft. Older
 `animatedPreviews: false` preferences remain Static; older enabled preferences
 upgrade to High quality. Unknown configuration fields are preserved.
+The same file stores `instantPlacementSpeed` (`"normal"`, `"fast"`, or `"slow"`)
+and `airOnly` (`true` or `false`). The sidebar and Controls shortcut work without
+Mod Menu.
 
 ## Building
 

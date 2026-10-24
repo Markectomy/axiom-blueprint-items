@@ -27,11 +27,13 @@ import net.minecraft.client.Minecraft;
 import com.moulberry.axiom.world_modification.CompressedBlockEntity;
 import com.moulberry.axiom.world_modification.Dispatcher;
 import dev.markectomy.blueprints.BlueprintItems;
+import dev.markectomy.blueprints.client.config.BlueprintPreviewSettings;
 import dev.markectomy.blueprints.client.integration.Axiom613Adapter;
 import dev.markectomy.blueprints.client.integration.BlueprintCloneBridge;
 import dev.markectomy.blueprints.client.library.BlueprintLibrary;
 import dev.markectomy.blueprints.client.render.BlueprintThumbnails;
 import dev.markectomy.blueprints.domain.BlueprintReference;
+import dev.markectomy.blueprints.domain.InstantPlacementSpeed;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -215,8 +217,13 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 verifyRepeatPlacement(context, world, reference, CloneBuilderTool.class, 8);
                 checkpoint("instant placement, click snapshot, Sneak release, offhand, and undo");
                 verifyInstantPlacement(context, world, reference);
-                checkpoint("held instant placement follows aim, stops on release, and undoes each copy");
-                verifyHeldInstantPlacement(context, world, reference);
+                checkpoint("full-swing and optional faster instant repeats, accelerated input, release, and separate undo");
+                verifyHeldInstantPlacement(context, world, reference, InstantPlacementSpeed.NORMAL);
+                verifyHeldInstantPlacement(context, world, reference, InstantPlacementSpeed.FAST);
+                verifyHeldInstantPlacement(context, world, reference, InstantPlacementSpeed.SLOW);
+                checkpoint("air-only placement, occupied block entities, live toggles, and undo");
+                BlueprintPlacementControlChecks.run(context);
+                BlueprintAirPlacementChecks.run(context, world, fixture.getParent());
                 checkpoint("legacy blueprint conversion, source tooltips, and read-only library audit");
                 BlueprintLegacyChecks.run(context, world, fixture.getParent());
                 verifySourceTooltips(context);
@@ -1095,7 +1102,9 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
     }
 
     private static void verifyHeldInstantPlacement(ClientGameTestContext context, TestSingleplayerContext world,
-                                                    BlueprintReference reference) {
+                                                    BlueprintReference reference, InstantPlacementSpeed speed) {
+        int repeatWindow = Math.max(24, speed.getIntervalTicks() * 2 + 4);
+        int nextCopyWindow = Math.max(8, speed.getIntervalTicks() + 4);
         BlockPos support = new BlockPos(0, 98, 3);
         BlockPos secondSupport = new BlockPos(4, 98, 3);
         world.getServer().runCommand("setblock 0 98 3 bedrock");
@@ -1104,8 +1113,10 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
         context.waitFor(client -> Math.abs(client.player.getY() - 180) < 0.01
             && client.level.getBlockState(secondSupport).is(Blocks.BEDROCK));
         boolean copyEntities = context.computeOnClient(client -> BuilderToolManager.copyEntities);
+        InstantPlacementSpeed previousSpeed = context.computeOnClient(client -> BlueprintPreviewSettings.INSTANCE.getCurrent().getInstantPlacementSpeed());
         try {
             context.runOnClient(client -> {
+                BlueprintPreviewSettings.INSTANCE.setInstantPlacementSpeed(speed);
                 selectBuilderTool(MoveBuilderTool.class);
                 BuilderToolManager.setToolSlotActive(false);
                 BuilderToolManager.copyEntities = true;
@@ -1116,14 +1127,20 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                     new net.minecraft.world.phys.Vec3(0.5, 98.95, 3.5));
             });
             context.waitTicks(2);
+            BlueprintCadenceProbe cadence = context.computeOnClient(client -> new BlueprintCadenceProbe(client, reference, false));
             context.getInput().holdKey(GLFW.GLFW_KEY_LEFT_SHIFT);
             context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
-            context.waitTicks(16);
+            try {
+                context.waitTicks(repeatWindow);
+            } finally {
+                context.runOnClient(client -> cadence.close());
+            }
+            context.runOnClient(client -> cadence.requireIntervals(speed.getIntervalTicks()));
             int firstCopies = savedCopies(world);
-            require(firstCopies >= 2 && firstCopies <= 6, "Held instant placement did not follow vanilla use cadence: " + firstCopies);
+            require(firstCopies >= 2, "Held instant placement stopped repeating at " + speed);
             context.runOnClient(client -> client.player.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES,
                 new net.minecraft.world.phys.Vec3(4.5, 98.95, 3.5)));
-            context.waitTicks(8);
+            context.waitTicks(nextCopyWindow);
             world.getServer().runOnServer(server -> require(server.overworld().getBlockState(support.above()).is(Blocks.STONE)
                 && server.overworld().getBlockState(secondSupport.above()).is(Blocks.STONE),
                 "Repeated placement did not follow the new aim"));
@@ -1138,7 +1155,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 context.runOnClient(client -> dispatchDelay(previousDelay));
             }
             int pausedCopies = savedCopies(world);
-            context.waitTicks(8);
+            context.waitTicks(nextCopyWindow);
             require(savedCopies(world) > pausedCopies, "Repeating did not resume after Axiom's send budget recovered");
             context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
             context.waitTicks(3);
@@ -1175,7 +1192,7 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             });
             int stoppedCopies;
             synchronized (decoderLock) {
-                context.waitTicks(12);
+                context.waitTicks(Math.max(12, speed.getIntervalTicks() + 4));
                 context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
                 context.waitTicks(2);
                 stoppedCopies = savedCopies(world);
@@ -1189,10 +1206,12 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
                 context.runOnClient(client -> UserAction.UNDO.call(null));
                 world.getServer().waitFor(server -> countTaggedEntities(server.overworld(), "blueprint_saved") == expected);
             }
+            if (speed == InstantPlacementSpeed.NORMAL) verifySlowHeldPreparation(context, world, reference, decoderLock);
         } finally {
             context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
             context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
             context.runOnClient(client -> {
+                BlueprintPreviewSettings.INSTANCE.setInstantPlacementSpeed(previousSpeed);
                 BuilderToolManager.copyEntities = copyEntities;
                 cloneTool().reset(false);
                 BuilderToolManager.setToolSlotActive(false);
@@ -1203,6 +1222,34 @@ public final class BlueprintPlacementGameTest implements FabricClientGameTest {
             context.waitFor(client -> Math.abs(client.player.getY() - 100) < 0.01);
         }
         assertWorldEmpty(world);
+    }
+
+    private static void verifySlowHeldPreparation(ClientGameTestContext context, TestSingleplayerContext world,
+                                                  BlueprintReference reference, Object decoderLock) {
+        context.waitTicks(2);
+        BlueprintCadenceProbe cadence = context.computeOnClient(client -> new BlueprintCadenceProbe(client, reference, true));
+        try {
+            context.getInput().holdKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            world.getServer().waitFor(server -> countTaggedEntities(server.overworld(), "blueprint_saved") > 0);
+            synchronized (decoderLock) {
+                context.waitTicks(18);
+            }
+            context.waitTicks(24);
+        } finally {
+            context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+            context.getInput().releaseKey(GLFW.GLFW_KEY_LEFT_SHIFT);
+            context.waitTicks(2);
+            context.runOnClient(client -> cadence.close());
+        }
+        context.runOnClient(client -> cadence.requireIntervals(InstantPlacementSpeed.NORMAL.getIntervalTicks()));
+        int copies = savedCopies(world);
+        require(copies >= 3, "Slow preparation did not resume held placement");
+        for (int remaining = copies - 1; remaining >= 0; remaining--) {
+            int expected = remaining;
+            context.runOnClient(client -> UserAction.UNDO.call(null));
+            world.getServer().waitFor(server -> countTaggedEntities(server.overworld(), "blueprint_saved") == expected);
+        }
     }
 
     private static int savedCopies(TestSingleplayerContext world) {
